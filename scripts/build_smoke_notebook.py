@@ -112,48 +112,82 @@ on Drive."""
 !git log -1 --oneline
 """
     ),
-    code(
-        """# FlowDPS's requirements.txt was generated from a CUDA 11.8 conda env.
-# It pins `torch==X+cu118`, `nvidia-cudnn-cu11`, `nvidia-cuda-runtime-cu11`,
-# `triton==3.0.0`, etc. Installing any of those on Colab's pre-built
-# CUDA 12 stack silently replaces cuDNN with the cu11 version, which
-# breaks torchvision (`operator torchvision::nms does not exist`).
-#
-# Strategy: parse FlowDPS's requirements.txt and skip anything that
-# touches the GPU runtime stack. Let pip resolve transitive deps for
-# everything else.
+    md(
+        """### 4a. Install a known-good torch + torchvision pair, then restart
 
-import re
+Colab's current base image has a torch / torchvision pair that doesn't
+match (torchvision's C++ ops fail to register — you'd see
+`RuntimeError: operator torchvision::nms does not exist`). FlowDPS
+also pins torch 2.4.1 + torchvision 0.19.1 in its requirements, so
+we use that exact pair from the CUDA 12.1 channel (matches Colab's
+CUDA 12.x driver).
+
+After this cell finishes, **the kernel will kill itself with
+`os.kill`** so the new torch can be picked up on reconnect. Drive
+mount and Hugging Face login both survive the restart — you can
+resume from cell 4b directly without re-running cells 1–3."""
+    ),
+    code(
+        """import subprocess, sys, os, time
+
+print('Installing matched torch 2.4.1 + torchvision 0.19.1 (CUDA 12.1 wheels)...')
+subprocess.run([
+    sys.executable, '-m', 'pip', 'install', '--quiet', '--force-reinstall',
+    'torch==2.4.1', 'torchvision==0.19.1',
+    '--index-url', 'https://download.pytorch.org/whl/cu121',
+], check=True)
+print('Done. Killing the kernel in 3 s so the new torch loads...')
+time.sleep(3)
+os.kill(os.getpid(), 9)
+"""
+    ),
+    md(
+        """### 4b. Verify torch / torchvision are matched, then install FlowDPS deps
+
+After the kernel restart above, Colab should auto-reconnect. The
+notebook session state is gone (Python variables reset) but the
+**Drive mount, HF login, and the cloned `/content/FlowDPS` checkout
+all survive** because they're filesystem-level.
+
+This cell verifies the new torch is healthy and installs the
+remaining FlowDPS application-level dependencies."""
+    ),
+    code(
+        """# Sanity-check torch + torchvision are now matched.
+import torch, torchvision, torchvision.ops
+print('torch:       ', torch.__version__,
+      ' cuda:', torch.version.cuda,
+      ' cudnn:', torch.backends.cudnn.version())
+print('torchvision: ', torchvision.__version__)
+assert hasattr(torchvision.ops, 'nms'), 'torchvision::nms still missing'
+print('torchvision::nms OK')
+
+# Filter FlowDPS requirements: skip torch/torchvision (already done),
+# all nvidia-* CUDA 11.8 wheels, triton (bundled with torch), and
+# numpy (ABI-coupled with torch's C extensions).
+import os, re, subprocess
+os.chdir('/content/FlowDPS')
 
 with open('requirements.txt') as f:
     all_lines = [l.strip() for l in f if l.strip() and not l.startswith('#')]
 
 SKIP_PATTERNS = (
-    r'^torch(==|$)',
-    r'^torchvision(==|$)',
-    r'^torchaudio(==|$)',
-    r'^nvidia-',         # all CUDA 11.8 runtime wheels
-    r'^triton(==|$)',    # bundled by torch; replacing it breaks the install
+    r'^torch(==|$)', r'^torchvision(==|$)', r'^torchaudio(==|$)',
+    r'^nvidia-', r'^triton(==|$)',
+    r'^numpy(==|$)',
 )
-
-def keep(line: str) -> bool:
-    return not any(re.match(p, line, re.IGNORECASE) for p in SKIP_PATTERNS)
-
-keep_list = [l for l in all_lines if keep(l)]
-skip_list = [l for l in all_lines if not keep(l)]
-print(f'Installing {len(keep_list)} packages')
-print(f'Skipping {len(skip_list)} GPU-stack packages: {skip_list}')
-
-import subprocess
+keep_list = [l for l in all_lines
+             if not any(re.match(p, l, re.IGNORECASE) for p in SKIP_PATTERNS)]
+skip_list = [l for l in all_lines if l not in keep_list]
+print(f'Installing {len(keep_list)} FlowDPS app deps; skipping {len(skip_list)}: {skip_list}')
 subprocess.run(['pip', 'install', '--quiet', *keep_list], check=True)
+print('Install complete.')
 
-# Sanity-check that Colab's torch + torchvision + CUDA stack still works.
-import torch, torchvision, torchvision.ops
-print('torch:', torch.__version__,
-      'cuda:', torch.version.cuda,
-      'cudnn:', torch.backends.cudnn.version())
-print('torchvision:', torchvision.__version__,
-      'nms importable:', hasattr(torchvision.ops, 'nms'))
+# Quick smoke imports to catch any remaining brokenness early.
+import diffusers, transformers, accelerate, huggingface_hub, safetensors
+print('diffusers:', diffusers.__version__,
+      'transformers:', transformers.__version__,
+      'accelerate:', accelerate.__version__)
 """
     ),
     md("## 5. Inspect the repo so we know the exact CLI we are about to use"),
