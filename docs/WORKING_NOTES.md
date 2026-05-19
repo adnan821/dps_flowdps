@@ -141,25 +141,37 @@ EXP-003/004's "low PSNR" is just "wrong face, not no face."
 8 dB PSNR is the PSNR between random face A and random face B — guidance was
 too weak to pull the trajectory toward the target measurement.
 
-### EXP-006 — FlowDPS-on-RF ζ sweep (2026-05-19, ongoing)
+### EXP-006 / EXP-007 — FlowDPS-on-RF ζ sweep (2026-05-19, complete)
 
 **Config.** 2 images, NFE=100, σ_blur=3.0, σ_noise=0.05, seeds matched to
-EXP-001 for comparison.
+EXP-001. PSNR(y) = 22.76 dB.
 
-| ζ   | PSNR(x_hat) | SSIM   | LPIPS  |
-|-----|-------------|--------|--------|
-| 1   | 9.12        | 0.237  | 0.681  |
-| 3   | 10.25       | 0.302  | 0.591  |
-| 10  | 14.66       | 0.434  | 0.448  |
-| 30  | (pending)   | —      | —      |
-| 100 | (pending)   | —      | —      |
+| ζ    | PSNR(x_hat) | SSIM   | LPIPS  | Notes |
+|------|-------------|--------|--------|-------|
+| 1    | 9.12        | 0.237  | 0.681  | random face (weak guidance) |
+| 3    | 10.25       | 0.302  | 0.591  | |
+| 10   | 14.66       | 0.434  | 0.448  | |
+| 30   | 19.66       | 0.544  | 0.320  | |
+| **100** | **23.45** | **0.650** | **0.223** | **peak (locked for overnight)** |
+| 300  | 23.35       | 0.541  | 0.331  | PSNR plateau, LPIPS regresses |
+| 1000 | 18.81       | 0.362  | 0.536  | over-guidance, collapses |
 
-PSNR(y) = 22.76 dB. Quality is monotonically improving in ζ but still well
-below Pixel-DPS at the same NFE/ζ. **Hypothesis:** FlowDPS-on-RF needs much
-larger ζ because the gradient path through `x_t + (1-t) v` has a `(1-t)`
-factor that shrinks late-step contributions, and the velocity-field magnitudes
-are different from the diffusion-noise magnitudes that drove Pixel-DPS's
-gradient scale.
+**Takeaways.**
+- **FlowDPS-on-RF lags Pixel-DPS by ~5 dB PSNR / ~0.2 SSIM at peak ζ.** Not
+  the "small efficiency–quality tradeoff" the proposal hypothesized; on
+  this hardware Pixel-DPS dominates in both quality and per-step cost (20 s
+  vs 24 s per image at NFE=100).
+- Quality is monotone in ζ up to ~100 and then **degrades** past 300 (guidance
+  pushes the trajectory off-manifold). Sweet spot is narrow and ζ has to be
+  ~10× larger than for Pixel-DPS.
+- ζ=100 is the locked operating point for the overnight main grid.
+
+**Open question for follow-up:** is the Pixel-DPS dominance an artifact of
+the Liu 2023 RF checkpoint (CelebA-HQ-256 was a smaller-scale training run
+than the DDPM), of the FlowDPS algorithm itself in pixel space, or of a
+hyperparameter we haven't found yet (e.g. Kim 2025's `step_size` argument
+that we left at the default)? Will investigate in EXP-009+ after the main
+grid finishes — for the report, this is itself a publishable finding.
 
 ---
 
