@@ -113,16 +113,47 @@ on Drive."""
 """
     ),
     code(
-        """# Install FlowDPS dependencies. Their requirements.txt pins CUDA 11.8
-# torch, but Colab already ships with a CUDA 12.x torch — we skip the
-# torch pin and install the rest.
-import subprocess
+        """# FlowDPS's requirements.txt was generated from a CUDA 11.8 conda env.
+# It pins `torch==X+cu118`, `nvidia-cudnn-cu11`, `nvidia-cuda-runtime-cu11`,
+# `triton==3.0.0`, etc. Installing any of those on Colab's pre-built
+# CUDA 12 stack silently replaces cuDNN with the cu11 version, which
+# breaks torchvision (`operator torchvision::nms does not exist`).
+#
+# Strategy: parse FlowDPS's requirements.txt and skip anything that
+# touches the GPU runtime stack. Let pip resolve transitive deps for
+# everything else.
+
+import re
+
 with open('requirements.txt') as f:
-    reqs = [l.strip() for l in f if l.strip() and not l.startswith('#')]
-keep = [r for r in reqs if not r.lower().startswith(('torch', 'torchvision', 'torchaudio'))]
-print('Installing:', keep)
-subprocess.run(['pip', 'install', '--quiet'] + keep, check=True)
-print('Done.')
+    all_lines = [l.strip() for l in f if l.strip() and not l.startswith('#')]
+
+SKIP_PATTERNS = (
+    r'^torch(==|$)',
+    r'^torchvision(==|$)',
+    r'^torchaudio(==|$)',
+    r'^nvidia-',         # all CUDA 11.8 runtime wheels
+    r'^triton(==|$)',    # bundled by torch; replacing it breaks the install
+)
+
+def keep(line: str) -> bool:
+    return not any(re.match(p, line, re.IGNORECASE) for p in SKIP_PATTERNS)
+
+keep_list = [l for l in all_lines if keep(l)]
+skip_list = [l for l in all_lines if not keep(l)]
+print(f'Installing {len(keep_list)} packages')
+print(f'Skipping {len(skip_list)} GPU-stack packages: {skip_list}')
+
+import subprocess
+subprocess.run(['pip', 'install', '--quiet', *keep_list], check=True)
+
+# Sanity-check that Colab's torch + torchvision + CUDA stack still works.
+import torch, torchvision, torchvision.ops
+print('torch:', torch.__version__,
+      'cuda:', torch.version.cuda,
+      'cudnn:', torch.backends.cudnn.version())
+print('torchvision:', torchvision.__version__,
+      'nms importable:', hasattr(torchvision.ops, 'nms'))
 """
     ),
     md("## 5. Inspect the repo so we know the exact CLI we are about to use"),
