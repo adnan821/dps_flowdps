@@ -88,14 +88,41 @@ print('HF cache → Drive:', HF_CACHE)
 !du -sh {HF_CACHE} 2>/dev/null || echo '(cache empty for now)'
 """
     ),
-    md("## 3. Authenticate to Hugging Face (for SD3 weights)"),
+    md(
+        """## 3. Authenticate to Hugging Face (for SD3 weights)
+
+We do three things here:
+1. Read the `HF_TOKEN` Colab secret.
+2. `huggingface_hub.login(...)` — writes the token to
+   `~/.cache/huggingface/token` so any HF library on this filesystem can
+   find it.
+3. **Also set `HF_TOKEN` as an environment variable** so subprocesses
+   we launch later (like `!python solve.py ...`) inherit the auth
+   without having to call login again."""
+    ),
     code(
-        """from google.colab import userdata
+        """import os
+from google.colab import userdata
 from huggingface_hub import login
 hf_token = userdata.get('HF_TOKEN')
 assert hf_token and hf_token.startswith('hf_'), 'HF_TOKEN secret missing or malformed'
-login(token=hf_token)
-print('HF login OK')
+login(token=hf_token, add_to_git_credential=False)
+os.environ['HF_TOKEN'] = hf_token
+os.environ['HUGGING_FACE_HUB_TOKEN'] = hf_token  # legacy var some libs still check
+print('HF login OK; HF_TOKEN exported to env for subprocesses.')
+
+# Quick sanity: can we hit a gated SD3 repo right now?
+from huggingface_hub import hf_hub_download
+try:
+    p = hf_hub_download(
+        repo_id='stabilityai/stable-diffusion-3-medium-diffusers',
+        filename='model_index.json',
+    )
+    print('SD3-diffusers access OK:', p)
+except Exception as e:
+    print('SD3-diffusers access FAILED — check license at:')
+    print('  https://huggingface.co/stabilityai/stable-diffusion-3-medium-diffusers')
+    raise
 """
     ),
     md(
