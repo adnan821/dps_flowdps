@@ -110,6 +110,12 @@ on Drive."""
 ![ -d FlowDPS ] || git clone https://github.com/FlowDPS-Inverse/FlowDPS.git
 %cd /content/FlowDPS
 !git log -1 --oneline
+
+# FlowDPS imports `from motionblur.motionblur import Kernel` (LeviBorodenko's
+# motion-blur kernel generator) but it's NOT listed in their requirements.txt.
+# Clone it as a subdirectory of FlowDPS so Python finds it on import.
+![ -d motionblur ] || git clone https://github.com/LeviBorodenko/motionblur.git
+!ls motionblur/ 2>&1 | head -5
 """
     ),
     md(
