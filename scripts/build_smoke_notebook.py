@@ -283,29 +283,62 @@ The first run will also pull SD3 Medium weights from Hugging Face (~6 GB).
 That download is one-time; subsequent runs reuse the cache."""
     ),
     code(
-        """OUT_DIR = '/content/drive/MyDrive/dvlm_proj/outputs/smoke_flowdps'
+        """import os, subprocess, time
+
+OUT_DIR = '/content/drive/MyDrive/dvlm_proj/outputs/smoke_flowdps'
 os.makedirs(OUT_DIR, exist_ok=True)
-
-# The repo writes results into the current working directory by default,
-# so we cd into a working dir, then move artifacts to Drive.
-WORK_DIR = '/content/work_flowdps'
-os.makedirs(WORK_DIR, exist_ok=True)
-%cd /content/FlowDPS
-
 PROMPT = 'a photo of a person'
 
-import time
+# Guard: HF_TOKEN must be in parent env before we launch the subprocess.
+# If this assert fires, re-run cell 3 (the HF auth cell) — the kernel
+# restart in 4a wipes os.environ, so HF_TOKEN has to be re-exported.
+assert os.environ.get('HF_TOKEN', '').startswith('hf_'), (
+    'HF_TOKEN missing from os.environ. Re-run cell 3 (HF auth) first.'
+)
+
+# Build the subprocess env explicitly. The `!python` shell magic
+# sometimes drops env vars when invoking via bash on Colab; using
+# subprocess.run with env=os.environ.copy() is bulletproof.
+env = os.environ.copy()
+# Belt + suspenders: huggingface_hub checks several env-var names.
+env['HF_TOKEN'] = env['HF_TOKEN']
+env['HUGGING_FACE_HUB_TOKEN'] = env['HF_TOKEN']
+env['HUGGINGFACE_HUB_TOKEN'] = env['HF_TOKEN']
+
+cmd = [
+    'python', '/content/FlowDPS/solve.py',
+    '--img_size', '768',
+    '--img_path', SAMPLE_IMG,
+    '--prompt', PROMPT,
+    '--task', 'deblur_gauss',
+    '--deg_scale', '61',
+    '--method', 'flowdps',
+    '--efficient_memory',
+]
+
+print(f'Launching FlowDPS subprocess with HF_TOKEN (len={len(env["HF_TOKEN"])}) ...')
+print('Command:', ' '.join(cmd))
+
 t0 = time.time()
-!python solve.py \\
-    --img_size 768 \\
-    --img_path "{SAMPLE_IMG}" \\
-    --prompt "{PROMPT}" \\
-    --task deblur_gauss \\
-    --deg_scale 61 \\
-    --method flowdps \\
-    --efficient_memory
+result = subprocess.run(
+    cmd, env=env, cwd='/content/FlowDPS',
+    capture_output=True, text=True,
+)
 elapsed = time.time() - t0
-print(f'FlowDPS run took {elapsed:.1f} s')
+
+# Trim TF/protobuf noise: show only stdout's last 50 lines + any stderr.
+stdout_lines = result.stdout.splitlines()
+stderr_lines = result.stderr.splitlines()
+print(f'\\n--- stdout (last 50 of {len(stdout_lines)} lines) ---')
+for ln in stdout_lines[-50:]:
+    print(ln)
+if result.returncode != 0:
+    print(f'\\n--- stderr (last 80 of {len(stderr_lines)} lines) ---')
+    for ln in stderr_lines[-80:]:
+        print(ln)
+    print(f'\\nFlowDPS FAILED with exit {result.returncode} after {elapsed:.1f} s')
+else:
+    print(f'\\nFlowDPS run took {elapsed:.1f} s')
 """
     ),
     code(
@@ -323,21 +356,45 @@ print(f'Copied {len(results)} files into {OUT_DIR}')
     ),
     md("## 8. Smoke run #2 — PSLD on the same image (our Latent-DPS baseline)"),
     code(
-        """OUT_DIR_PSLD = '/content/drive/MyDrive/dvlm_proj/outputs/smoke_psld'
+        """import os, subprocess, time
+
+OUT_DIR_PSLD = '/content/drive/MyDrive/dvlm_proj/outputs/smoke_psld'
 os.makedirs(OUT_DIR_PSLD, exist_ok=True)
 
-import time
+env = os.environ.copy()
+env['HUGGING_FACE_HUB_TOKEN'] = env.get('HF_TOKEN', '')
+env['HUGGINGFACE_HUB_TOKEN'] = env.get('HF_TOKEN', '')
+
+cmd = [
+    'python', '/content/FlowDPS/solve.py',
+    '--img_size', '768',
+    '--img_path', SAMPLE_IMG,
+    '--prompt', PROMPT,
+    '--task', 'deblur_gauss',
+    '--deg_scale', '61',
+    '--method', 'psld',
+    '--efficient_memory',
+]
+
 t0 = time.time()
-!python solve.py \\
-    --img_size 768 \\
-    --img_path "{SAMPLE_IMG}" \\
-    --prompt "{PROMPT}" \\
-    --task deblur_gauss \\
-    --deg_scale 61 \\
-    --method psld \\
-    --efficient_memory
+result = subprocess.run(
+    cmd, env=env, cwd='/content/FlowDPS',
+    capture_output=True, text=True,
+)
 elapsed = time.time() - t0
-print(f'PSLD run took {elapsed:.1f} s')
+
+stdout_lines = result.stdout.splitlines()
+stderr_lines = result.stderr.splitlines()
+print(f'--- stdout (last 50 of {len(stdout_lines)} lines) ---')
+for ln in stdout_lines[-50:]:
+    print(ln)
+if result.returncode != 0:
+    print(f'\\n--- stderr (last 80 of {len(stderr_lines)} lines) ---')
+    for ln in stderr_lines[-80:]:
+        print(ln)
+    print(f'\\nPSLD FAILED with exit {result.returncode} after {elapsed:.1f} s')
+else:
+    print(f'\\nPSLD run took {elapsed:.1f} s')
 """
     ),
     md(
