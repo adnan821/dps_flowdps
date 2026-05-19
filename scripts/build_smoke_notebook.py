@@ -66,6 +66,28 @@ print('Project dir:', PROJECT_DIR)
 !ls {PROJECT_DIR}
 """
     ),
+    md(
+        """## 2b. Redirect the Hugging Face cache to Drive
+
+SD3 Medium weights are ~6 GB. By default `huggingface_hub` caches them
+to `/content/` (the VM's local disk), which is wiped when the runtime
+disconnects. Point the cache at Drive so the weights are downloaded
+once and reused across sessions.
+
+This must run **before** any `from_pretrained(...)` or `login(...)`
+call — env vars are read at HF library init."""
+    ),
+    code(
+        """import os
+HF_CACHE = '/content/drive/MyDrive/dvlm_proj/checkpoints/hf_cache'
+os.makedirs(HF_CACHE, exist_ok=True)
+os.environ['HF_HOME'] = HF_CACHE
+os.environ['HUGGINGFACE_HUB_CACHE'] = HF_CACHE
+os.environ['TRANSFORMERS_CACHE'] = HF_CACHE
+print('HF cache → Drive:', HF_CACHE)
+!du -sh {HF_CACHE} 2>/dev/null || echo '(cache empty for now)'
+"""
+    ),
     md("## 3. Authenticate to Hugging Face (for SD3 weights)"),
     code(
         """from google.colab import userdata
