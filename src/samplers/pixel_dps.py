@@ -75,6 +75,8 @@ class PixelDPS:
         seed: Optional[int] = 0,
         verbose: bool = False,
         spectral_weight: Optional[torch.Tensor] = None,
+        pigdm_otf: Optional[torch.Tensor] = None,
+        pigdm_sigma_n: Optional[float] = None,
     ) -> DPSResult:
         """Run DPS to recover `x` from a measurement `y = A(x) + noise`.
 
@@ -94,6 +96,11 @@ class PixelDPS:
         import time
         from src.samplers.schedules import resolve as _resolve_zeta
         from src.samplers.spectral_weight import spectral_residual_l2
+        from src.samplers.tweedie_likelihood import pigdm_weight, diffusion_r_t
+
+        # Tier-C: precompute |H|^2 once; per-step weight depends on r_t.
+        use_pigdm = pigdm_otf is not None
+        pigdm_sn = pigdm_sigma_n if pigdm_sigma_n is not None else sigma_y
 
         B = y.shape[0]
         y = y.to(self.device)
@@ -130,10 +137,15 @@ class PixelDPS:
             # Chung et al. 2023 use the L2 norm (not squared) for the
             # likelihood gradient. This keeps the gradient magnitude bounded
             # and lets a fixed zeta work across all timesteps.
-            # If `spectral_weight` is provided, the residual is FFT-reweighted
-            # before the L2 norm; default None preserves the pre-Tier-B
-            # spatial-domain behavior bit-for-bit.
-            loss = spectral_residual_l2(residual, spectral_weight)
+            # Tier-B: optional static FFT-domain reweighting via `spectral_weight`.
+            # Tier-C: optional Tweedie-corrected per-step weight via `pigdm_otf`.
+            # Default (both None) preserves the pre-refactor spatial L2.
+            if use_pigdm:
+                r_t = diffusion_r_t(float(alpha_bar_t.item()))
+                W = pigdm_weight(pigdm_otf, pigdm_sn, r_t)
+                loss = spectral_residual_l2(residual, W)
+            else:
+                loss = spectral_residual_l2(residual, spectral_weight)
             grad = torch.autograd.grad(loss, x, retain_graph=False)[0]
             grad_norm = grad.flatten(1).norm(dim=1).mean().item()
 

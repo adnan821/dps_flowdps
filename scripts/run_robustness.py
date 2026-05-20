@@ -54,17 +54,20 @@ def make_flowdps_rf_sampler(device):
 
 
 def _resolve_method_config(method: str, args):
-    """Return (sampler_factory_kind, zeta, use_spectral_weight)."""
+    """Return (sampler_factory_kind, zeta, use_spectral_weight, use_pigdm)."""
     if method == "pixel_dps":
-        return ("pixel_dps", args.zeta_pixel_dps, False)
+        return ("pixel_dps", args.zeta_pixel_dps, False, False)
     if method == "pixel_dps_spectral":
-        # Spectral-aware guidance built on top of Pixel-DPS v1 weights and
-        # v1 zeta. The W kernel is computed inside main() per condition.
-        return ("pixel_dps", args.zeta_pixel_dps, True)
+        return ("pixel_dps", args.zeta_pixel_dps, True, False)
+    if method == "pixel_dps_pigdm":
+        # Tier-C Pi-GDM on Pixel-DPS for the robustness study.
+        return ("pixel_dps", args.zeta_pixel_dps, False, True)
     if method == "flowdps_rf":
-        return ("flowdps_rf", args.zeta_flowdps_rf, False)
+        return ("flowdps_rf", args.zeta_flowdps_rf, False, False)
     if method == "flowdps_rf_spectral":
-        return ("flowdps_rf", args.zeta_flowdps_rf, True)
+        return ("flowdps_rf", args.zeta_flowdps_rf, True, False)
+    if method == "flowdps_rf_pigdm":
+        return ("flowdps_rf", args.zeta_flowdps_rf, False, True)
     raise ValueError(f"Unknown method: {method}")
 
 
@@ -108,9 +111,11 @@ def main(args):
     t_start = time.time()
 
     for method, L, theta, sn in itertools.product(methods, motion_lengths, motion_angles, sigma_noises):
-        sampler_kind, zeta, use_spectral = _resolve_method_config(method, args)
+        sampler_kind, zeta, use_spectral, use_pigdm = _resolve_method_config(method, args)
         zeta_str = _zeta_stringify(zeta)
         W_for_this_method = spectral_W if use_spectral else None
+        # Tier-C: pigdm_otf is the assumed Gaussian OTF (same as Tier-B's H_assumed).
+        pigdm_otf_arg = H_assumed if use_pigdm else None
 
         if method not in samplers:
             print(f"\n=== Building sampler: {method} (kind={sampler_kind}, spectral={use_spectral}) ===")
@@ -150,6 +155,8 @@ def main(args):
                         num_steps=args.nfe, zeta=zeta, sigma_y=max(sn, 1e-3),
                         seed=args.seed + img_idx, verbose=False,
                         spectral_weight=W_for_this_method,
+                        pigdm_otf=pigdm_otf_arg,
+                        pigdm_sigma_n=max(sn, 1e-3),
                     )
                 else:
                     res = sampler.sample(
@@ -157,6 +164,8 @@ def main(args):
                         num_steps=args.nfe, zeta=zeta,
                         seed=args.seed + img_idx, verbose=False,
                         spectral_weight=W_for_this_method,
+                        pigdm_otf=pigdm_otf_arg,
+                        pigdm_sigma_n=max(sn, 1e-3),
                     )
             x_hat = res.x_hat
             p = psnr(x_hat[0], x_dev[0])

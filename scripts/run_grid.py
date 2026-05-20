@@ -58,22 +58,37 @@ from src.samplers.schedules import stringify as _zeta_stringify, zeta_ramp
 
 
 def _resolve_method_config(method: str, args):
-    """Return (sampler_factory_callable, zeta_value_or_schedule) for `method`.
+    """Return (sampler_factory_callable, zeta_value_or_schedule,
+    extra_kwargs_dict) for `method`. The extra_kwargs are passed through
+    to sampler.sample() — used for Tier-B (`spectral_weight`) and
+    Tier-C (`pigdm_otf`).
 
     Adding a new method here is the only change needed to extend the grid
     runner with a new sampler variant.
     """
     if method == "pixel_dps":
-        return ("pixel_dps", args.zeta_pixel_dps)
+        return ("pixel_dps", args.zeta_pixel_dps, {})
     if method == "pixel_dps_v2":
-        # Re-tuned scalar ζ on a 2-img validation; 20 dominates 10/15/25/30.
-        return ("pixel_dps", args.zeta_pixel_dps_v2)
+        # Re-tuned scalar ζ on a 2-img validation; 30 in the middle of the
+        # 25-40 plateau.
+        return ("pixel_dps", args.zeta_pixel_dps_v2, {})
+    if method == "pixel_dps_pigdm":
+        # Tier-C: Tweedie-corrected likelihood, per-step weight depending
+        # on r_t = (1 - alpha_bar_t) / alpha_bar_t. The actual `pigdm_otf`
+        # tensor is computed per condition inside main() because it depends
+        # on sigma_b.
+        return ("pixel_dps", args.zeta_pixel_dps_v2,
+                {"_pigdm": True, "pigdm_sigma_n": None})  # sigma_n filled in per-cell
     if method == "flowdps_rf":
-        return ("flowdps_rf", args.zeta_flowdps_rf)
+        return ("flowdps_rf", args.zeta_flowdps_rf, {})
     if method == "flowdps_rf_v2":
         # EMA weights + ramp(200, α=0.5) ramps guidance up toward t=1
         # (data side). Won the 2-img validation by ~0.8 dB over EMA+scalar.
-        return ("flowdps_rf_ema", zeta_ramp(args.zeta_flowdps_rf_v2, 0.5))
+        return ("flowdps_rf_ema", zeta_ramp(args.zeta_flowdps_rf_v2, 0.5), {})
+    if method == "flowdps_rf_pigdm":
+        # Tier-C on FlowDPS: r_t = (1-t)^2 (RF analog).
+        return ("flowdps_rf_ema", zeta_ramp(args.zeta_flowdps_rf_v2, 0.5),
+                {"_pigdm": True, "pigdm_sigma_n": None})
     raise ValueError(f"Unknown method: {method}")
 
 
@@ -105,9 +120,21 @@ def main(args):
     done = 0
     t_start = time.time()
 
+    # Cache `gaussian_otf` per sigma_b so we don't rebuild it 50 times.
+    from src.forward.ops_fft import gaussian_otf
+    otf_cache: dict[float, torch.Tensor] = {}
+
     for method, sb, sn, nfe in itertools.product(methods, sigma_blurs, sigma_noises, nfes):
-        sampler_kind, zeta = _resolve_method_config(method, args)
+        sampler_kind, zeta, extra_kwargs = _resolve_method_config(method, args)
         zeta_str = _zeta_stringify(zeta)
+        # If this method is Tier-C (pigdm), resolve the per-cell OTF + sigma_n.
+        use_pigdm = extra_kwargs.pop("_pigdm", False)
+        sample_kwargs: dict = {}
+        if use_pigdm:
+            if sb not in otf_cache:
+                otf_cache[sb] = gaussian_otf(sb, (256, 256), device=device)
+            sample_kwargs["pigdm_otf"] = otf_cache[sb]
+            sample_kwargs["pigdm_sigma_n"] = max(sn, 1e-3)
         # Build sampler once per method.
         if method not in samplers:
             print(f"\n=== Building sampler: {method} (kind={sampler_kind}) ===")
@@ -145,12 +172,14 @@ def main(args):
                         y=y, forward_op=forward_op,
                         num_steps=nfe, zeta=zeta, sigma_y=max(sn, 1e-3),
                         seed=args.seed + img_idx, verbose=False,
+                        **sample_kwargs,
                     )
                 else:
                     res = sampler.sample(
                         y=y, forward_op=forward_op,
                         num_steps=nfe, zeta=zeta,
                         seed=args.seed + img_idx, verbose=False,
+                        **sample_kwargs,
                     )
             x_hat = res.x_hat
             p = psnr(x_hat[0], x_dev[0])

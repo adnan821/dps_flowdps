@@ -56,6 +56,8 @@ class FlowDPSRF:
         seed: Optional[int] = 0,
         verbose: bool = False,
         spectral_weight: Optional[torch.Tensor] = None,
+        pigdm_otf: Optional[torch.Tensor] = None,
+        pigdm_sigma_n: float = 0.05,
     ) -> FlowDPSResult:
         """Sample x ~ p(x | y) with FlowDPS-on-RF.
 
@@ -72,6 +74,9 @@ class FlowDPSRF:
         """
         from src.samplers.schedules import resolve as _resolve_zeta
         from src.samplers.spectral_weight import spectral_residual_l2
+        from src.samplers.tweedie_likelihood import pigdm_weight, rf_r_t
+
+        use_pigdm = pigdm_otf is not None
         import time
 
         B, C, H, W = y.shape
@@ -107,8 +112,14 @@ class FlowDPSRF:
             z1_hat_pix = (z1_hat + 1.0) / 2.0
             y_hat = forward_op(z1_hat_pix)
             residual = y_hat - y
-            # Optional FFT-domain reweighting for Tier-B spectral guidance.
-            loss = spectral_residual_l2(residual, spectral_weight)
+            # Tier-B: optional static FFT reweighting via `spectral_weight`.
+            # Tier-C: optional Tweedie-corrected per-step weight via `pigdm_otf`.
+            if use_pigdm:
+                r_t = rf_r_t(num_t)
+                W = pigdm_weight(pigdm_otf, pigdm_sigma_n, r_t)
+                loss = spectral_residual_l2(residual, W)
+            else:
+                loss = spectral_residual_l2(residual, spectral_weight)
             grad = torch.autograd.grad(loss, x, retain_graph=False)[0]
             grad_norm = grad.flatten(1).norm(dim=1).mean().item()
 
