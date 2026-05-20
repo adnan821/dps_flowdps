@@ -25,22 +25,13 @@ import torch
 from diffusers import DDIMScheduler, UNet2DModel
 
 
+# Shared FFT utilities now live in src/forward/ops_fft.py.
+from src.forward.ops_fft import gaussian_kernel_torch as _gaussian_kernel_torch_base
+from src.forward.ops_fft import otf as _otf
+
+
 def _gaussian_kernel_torch(sigma: float, size: int, device, dtype) -> torch.Tensor:
-    if size % 2 == 0:
-        size += 1
-    ax = torch.arange(size, device=device, dtype=dtype) - (size - 1) / 2
-    xx, yy = torch.meshgrid(ax, ax, indexing="ij")
-    k = torch.exp(-(xx ** 2 + yy ** 2) / (2.0 * sigma ** 2))
-    return k / k.sum()
-
-
-def _otf(kernel: torch.Tensor, shape: tuple[int, int]) -> torch.Tensor:
-    H, W = shape
-    kh, kw = kernel.shape
-    padded = torch.zeros(H, W, device=kernel.device, dtype=kernel.dtype)
-    padded[:kh, :kw] = kernel
-    padded = torch.roll(padded, shifts=(-(kh // 2), -(kw // 2)), dims=(0, 1))
-    return torch.fft.fft2(padded)
+    return _gaussian_kernel_torch_base(sigma, size=size, device=device, dtype=dtype)
 
 
 @dataclass

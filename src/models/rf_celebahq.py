@@ -113,8 +113,12 @@ def _build_config() -> "ml_collections.ConfigDict":
 def load_rf_model(
     ckpt_path: str = "checkpoints/rectified_flow/celebahq_256_rf.pth",
     device: str | torch.device = "cuda",
+    use_non_ema: bool = False,
 ) -> "RFVelocityModel":
-    """Instantiate NCSN++ and load EMA weights. Returns a `RFVelocityModel`."""
+    """Instantiate NCSN++ and load weights. EMA by default (best quality);
+    set `use_non_ema=True` to load the raw 'model' state_dict instead (used
+    for the v1 baseline so the v2-vs-v1 comparison is apples-to-apples
+    against the originally-shipped non-EMA numbers)."""
     # These imports must come AFTER sys.path is munged.
     from models import ncsnpp  # noqa: F401  (registers 'ncsnpp')
     from models.ncsnpp import NCSNpp
@@ -123,25 +127,59 @@ def load_rf_model(
     model = NCSNpp(cfg)
     state_dict_blob = torch.load(ckpt_path, map_location="cpu", weights_only=False)
 
-    # Try EMA shadow_params (best quality, used at eval in gnobitab/RectifiedFlow).
-    # If the count doesn't line up with model.parameters() (their training code
-    # may exclude one buffer-like param from the EMA), fall back to the raw
-    # 'model' state_dict.
+    # Try EMA shadow_params. gnobitab/RectifiedFlow's EMA tracker
+    # (`external/RectifiedFlow/ImageGeneration/models/ema.py:30`) builds
+    # `shadow_params = [p.clone() for p in parameters if p.requires_grad]`
+    # — it skips frozen parameters. NCSN++'s Gaussian Fourier-features
+    # projection at `layerspp.py:37` is registered as
+    # `nn.Parameter(..., requires_grad=False)` — that's the missing 645th
+    # param. To align cleanly, walk `model.named_parameters()` in registration
+    # order and skip those with `requires_grad=False`, mapping the remaining
+    # in-order to the saved `shadow_params`.
     loaded = False
     ema = state_dict_blob.get("ema")
-    if isinstance(ema, dict) and "shadow_params" in ema:
+    if isinstance(ema, dict) and "shadow_params" in ema and not use_non_ema:
         shadow = ema["shadow_params"]
-        params = list(model.parameters())
-        if len(shadow) == len(params):
+        named_params = list(model.named_parameters())
+        trainable = [(n, p) for n, p in named_params if p.requires_grad]
+        frozen = [(n, p) for n, p in named_params if not p.requires_grad]
+        if len(shadow) == len(trainable):
+            # Verify shape-by-shape before any copy.
+            for i, ((n, p), sp) in enumerate(zip(trainable, shadow)):
+                if p.shape != sp.shape:
+                    raise RuntimeError(
+                        f"[rf_celebahq] EMA shape mismatch at trainable idx {i} ({n}): "
+                        f"model {tuple(p.shape)} vs shadow {tuple(sp.shape)}"
+                    )
             with torch.no_grad():
-                for p, sp in zip(params, shadow):
+                for (_, p), sp in zip(trainable, shadow):
                     p.copy_(sp.to(p.dtype))
-            print(f"[rf_celebahq] Loaded EMA shadow_params ({len(shadow)} tensors).")
+            # CRITICAL: frozen params (e.g. `all_modules.0.W`, the Fourier-
+            # features random projection) are excluded from EMA but ARE
+            # initialized randomly each time we construct the model. They
+            # must still be copied from the checkpoint's raw 'model'
+            # state_dict, otherwise we use a fresh random projection that
+            # doesn't match what the trained weights expect.
+            raw = state_dict_blob.get("model", {})
+            raw = {k.replace("module.", ""): v for k, v in raw.items()}
+            n_frozen_copied = 0
+            with torch.no_grad():
+                for name, p in frozen:
+                    if name in raw:
+                        p.copy_(raw[name].to(p.dtype))
+                        n_frozen_copied += 1
+            print(
+                f"[rf_celebahq] Loaded EMA shadow_params ({len(shadow)} tensors); "
+                f"also copied {n_frozen_copied}/{len(frozen)} frozen param(s) "
+                f"from the raw 'model' state_dict "
+                f"({[n for n, _ in frozen][:3]})."
+            )
             loaded = True
         else:
             print(
-                f"[rf_celebahq] EMA shadow_params count ({len(shadow)}) != "
-                f"model params ({len(params)}); falling back to 'model' state_dict."
+                f"[rf_celebahq] EMA shadow_params count ({len(shadow)}) does not match "
+                f"trainable model params ({len(trainable)}); falling back to "
+                f"'model' state_dict."
             )
 
     if not loaded:

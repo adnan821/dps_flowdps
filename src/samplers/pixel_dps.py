@@ -13,7 +13,10 @@ Conventions:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import Callable, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from src.samplers.schedules import ZetaSchedule
 
 import torch
 from diffusers import DDIMScheduler, UNet2DModel
@@ -67,7 +70,7 @@ class PixelDPS:
         y: torch.Tensor,
         forward_op: Callable[[torch.Tensor], torch.Tensor],
         num_steps: int = 100,
-        zeta: float = 1.0,
+        zeta: "float | ZetaSchedule" = 1.0,
         sigma_y: float = 0.05,
         seed: Optional[int] = 0,
         verbose: bool = False,
@@ -79,12 +82,16 @@ class PixelDPS:
             forward_op: differentiable function mapping `[0,1]` images to `y`-space
                 (same `A` used to generate `y`).
             num_steps: number of DDIM reverse steps (NFE budget per image).
-            zeta: likelihood-gradient guidance scale.
+            zeta: likelihood-gradient guidance scale. Either a scalar
+                (constant ζ across all reverse steps, the original behavior)
+                or a `ZetaSchedule` callable `(step_idx, num_steps) -> float`
+                from `src.samplers.schedules`.
             sigma_y: assumed measurement-noise std for the Gaussian likelihood
                 (we use `0.5 * ||y - A(x_hat_0)||^2 / sigma_y^2`).
             seed: per-image RNG seed for reproducibility.
         """
         import time
+        from src.samplers.schedules import resolve as _resolve_zeta
 
         B = y.shape[0]
         y = y.to(self.device)
@@ -125,11 +132,13 @@ class PixelDPS:
             grad = torch.autograd.grad(loss, x, retain_graph=False)[0]
             grad_norm = grad.flatten(1).norm(dim=1).mean().item()
 
+            # Resolve ζ for this step (supports scalar or callable schedule).
+            zeta_t = _resolve_zeta(zeta, i, num_steps)
             # DDIM update (no guidance) — using the same eps we computed.
             with torch.no_grad():
                 x_prev = self.scheduler.step(eps.detach(), t, x.detach()).prev_sample
                 # DPS likelihood-gradient injection on top of the DDIM step.
-                x = x_prev - zeta * grad
+                x = x_prev - zeta_t * grad
 
             log.append({
                 "step": i,

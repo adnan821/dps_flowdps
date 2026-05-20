@@ -21,11 +21,14 @@ likelihood gradient at each step:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import Callable, Optional, TYPE_CHECKING
 
 import torch
 
 from src.models.rf_celebahq import RFVelocityModel
+
+if TYPE_CHECKING:
+    from src.samplers.schedules import ZetaSchedule
 
 
 @dataclass
@@ -48,7 +51,7 @@ class FlowDPSRF:
         y: torch.Tensor,
         forward_op: Callable[[torch.Tensor], torch.Tensor],
         num_steps: int = 100,
-        zeta: float = 1.0,
+        zeta: "float | ZetaSchedule" = 1.0,
         eps_t: float = 1e-3,
         seed: Optional[int] = 0,
         verbose: bool = False,
@@ -59,10 +62,14 @@ class FlowDPSRF:
             y: observed degraded image in [0, 1], shape (B, C, H, W).
             forward_op: differentiable forward operator on [0, 1] images.
             num_steps: number of Euler steps (NFE budget).
-            zeta: likelihood-gradient guidance scale.
+            zeta: likelihood-gradient guidance scale. Either a scalar
+                (constant ζ across all steps, the original behavior) or
+                a `ZetaSchedule` callable `(step_idx, num_steps) -> float`
+                from `src.samplers.schedules`. Default 1.0 (scalar).
             eps_t: integration start time (avoid t=0 singularity in 1/t terms).
             seed: per-call RNG seed for the initial noise draw.
         """
+        from src.samplers.schedules import resolve as _resolve_zeta
         import time
 
         B, C, H, W = y.shape
@@ -102,9 +109,11 @@ class FlowDPSRF:
             grad = torch.autograd.grad(loss, x, retain_graph=False)[0]
             grad_norm = grad.flatten(1).norm(dim=1).mean().item()
 
-            # FlowDPS update: corrected velocity, Euler step.
+            # FlowDPS update: corrected velocity, Euler step. ζ may be a
+            # schedule callable; resolve to a scalar for this step.
+            zeta_t = _resolve_zeta(zeta, i, num_steps)
             with torch.no_grad():
-                v_eff = v.detach() - zeta * grad
+                v_eff = v.detach() - zeta_t * grad
                 x = (x.detach() + dt * v_eff).detach()
 
             log.append({
