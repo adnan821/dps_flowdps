@@ -1,0 +1,555 @@
+% AI-623 Deep Vision Language Models — Final Report (v2)
+% Group 13: Adnan, Hatim, Adnan
+% Replaces docs/group13.pdf (first submission, Section 5 fabricated).
+%
+% Build:
+%   pdflatex group13_v2.tex && bibtex group13_v2 && pdflatex group13_v2 && pdflatex group13_v2
+%
+% Requires: neurips_2024.sty in the same directory (use the same one as
+% the first submission). Figures expected under ../outputs/figures/ as PDFs.
+
+\documentclass{article}
+
+% NeurIPS 2024 — same style as the first submission. If using a fresh
+% checkout, copy neurips_2024.sty from the original group13 build dir.
+\usepackage[final]{neurips_2024}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{url}
+\usepackage{booktabs}
+\usepackage{amsfonts}
+\usepackage{amsmath}
+\usepackage{nicefrac}
+\usepackage{microtype}
+\usepackage{xcolor}
+\usepackage{graphicx}
+\usepackage{subcaption}
+\usepackage{hyperref}
+\usepackage{makecell}
+\usepackage{multirow}
+
+\graphicspath{{../outputs/figures/}}
+
+\title{Pixel-Space Posterior Sampling for Image Deblurring:\\
+       A Controlled Comparison of DPS and FlowDPS-Style Guidance\\
+       on CelebA-HQ-256}
+
+\author{%
+  Eeman Adnan \\
+  Department of Artificial Intelligence \\
+  Lahore University of Management Sciences \\
+  \texttt{24280022@lums.edu.pk} \\
+  \And
+  Muhammad Aslam Adnan \\
+  Department of Artificial Intelligence \\
+  Lahore University of Management Sciences \\
+  \texttt{25280067@lums.edu.pk} \\
+  \And
+  Mufaddal Hatim \\
+  Department of Artificial Intelligence \\
+  Lahore University of Management Sciences \\
+  \texttt{25280084@lums.edu.pk} \\
+}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+Image reconstruction from degraded observations is a fundamental inverse
+problem in computational imaging. \emph{Diffusion Posterior Sampling}
+(DPS)~\cite{chung2023dps} leverages a learned diffusion prior plus a
+measurement-likelihood gradient to solve such problems with high
+reconstruction fidelity, at the cost of hundreds of neural function
+evaluations (NFE). \emph{Flow Matching} models~\cite{lipman2023flow,liu2023rectified}
+offer a deterministic, ODE-based alternative that has been argued to
+enable comparable quality with fewer steps. In this work we conduct a
+controlled comparison of \textbf{pixel-space DPS} on a CelebA-HQ-256 DDPM
+against a \textbf{pixel-space re-implementation of FlowDPS}~\cite{kim2025flowdps},
+whose official code is latent-only (Stable Diffusion 3), on top of the
+Liu~et~al.\ 2023 Rectified Flow CelebA-HQ-256 checkpoint. We evaluate
+both methods on Gaussian deblurring across $3 \times 2 \times 3 = 18$
+conditions $\times\,50$ images $= 1800$ reconstructions, and study
+operator-mismatch robustness using motion-blur measurements while the
+sampler's likelihood assumes Gaussian (1200 additional reconstructions).
+We further include Wiener-filter and DnCNN$+$PnP-ADMM baselines (600
+reconstructions). On the matched-Gaussian grid Pixel-DPS dominates the
+comparison, with a PSNR advantage of $+1.4$ to $+4.2$\,dB over our
+FlowDPS reimplementation, and FlowDPS saturates with NFE while Pixel-DPS
+keeps improving. Under operator mismatch, however, FlowDPS-on-RF is
+\emph{relatively more robust} (degrades by $\sim$2.5\,dB versus
+$\sim$5\,dB for Pixel-DPS), reversing the matched-condition comparison.
+All four methods comfortably beat Wiener; DnCNN$+$PnP-ADMM beats our
+FlowDPS reimplementation in $5/6$ noisy cells while running $\sim$60$\times$
+faster than DPS. The findings give concrete guidance for choosing between
+these methods under known versus uncertain forward operators.
+\end{abstract}
+
+% =====================================================================
+\section{Introduction}\label{sec:intro}
+
+Image reconstruction from degraded observations is a fundamental problem
+in computer vision and computational imaging. It is typically formulated
+as an inverse problem,
+\begin{equation}
+  y = A x + \epsilon, \qquad \epsilon \sim \mathcal{N}(0, \sigma_n^2 I),
+\end{equation}
+where $A$ is a known or partially known degradation operator (e.g.\
+Gaussian blur), and the goal is to recover the unknown clean image $x$
+given only $y$ and a prior over natural images. The problem is inherently
+ill-posed; multiple plausible $x$ can produce the same observation, so a
+strong prior is essential. Modern approaches replace classical
+handcrafted priors with learned generative priors such as Denoising
+Diffusion Probabilistic Models (DDPMs)~\cite{ho2020ddpm} and Flow Matching
+models~\cite{lipman2023flow,liu2023rectified}. These priors combined with
+explicit measurement guidance form the basis of methods like
+DPS~\cite{chung2023dps}, DDRM~\cite{kawar2022ddrm}, and the more recent
+FlowDPS~\cite{kim2025flowdps}.
+
+This paper conducts a controlled empirical comparison of two posterior
+sampling paradigms for image deblurring on faces:
+\begin{enumerate}[leftmargin=*,itemsep=2pt]
+  \item \textbf{Pixel-DPS}: the original DPS sampler from
+    Chung~et~al.~\cite{chung2023dps}, on a CelebA-HQ-256 DDPM checkpoint
+    (\texttt{google/ddpm-ema-celebahq-256}).
+  \item \textbf{FlowDPS-on-RF}: a from-scratch pixel-space
+    reimplementation of the Kim~et~al.~2025 FlowDPS algorithm on top of
+    the Liu~et~al.~2023 CelebA-HQ-256 Rectified Flow
+    checkpoint~\cite{liu2023rectified}. The official Kim 2025 codebase is
+    Stable~Diffusion~3-only; our reimplementation exists so we can do a
+    true pixel-space comparison against Pixel-DPS at the same resolution
+    and on the same dataset.
+\end{enumerate}
+
+Both methods therefore share the \emph{same dataset, same resolution, and
+same NCSN++/U-Net architectural family}, so any quality or efficiency
+difference can be cleanly attributed to the choice of posterior-sampling
+paradigm rather than to incidental differences in the underlying prior.
+We additionally evaluate two classical baselines (Wiener,
+DnCNN$+$PnP-ADMM) and one operator-mismatch robustness study (true
+measurement is motion blur; sampler's likelihood assumes Gaussian).
+
+The contributions of this work are:
+\begin{itemize}[leftmargin=*,itemsep=2pt]
+  \item A pixel-space, fair-comparison evaluation of two posterior
+    samplers (DPS and FlowDPS-style guidance) on a common dataset and
+    architectural family.
+  \item Empirical evidence that, on this setup, Pixel-DPS dominates
+    FlowDPS-on-RF in the matched-Gaussian setting by 1.4--4.2\,dB PSNR,
+    while FlowDPS-on-RF degrades less under operator mismatch.
+  \item A four-method (Wiener, DnCNN$+$PnP, FlowDPS-on-RF, Pixel-DPS)
+    Pareto-frontier characterization across three orders of magnitude of
+    per-image compute.
+  \item A reproducible open-source pipeline at
+    \url{https://github.com/adnan821/dps_flowdps}, including the 3{,}600
+    measured rows and per-experiment logs.
+\end{itemize}
+
+% =====================================================================
+\section{Related Work}\label{sec:related}
+
+% PORTING NOTE: this section is largely unchanged from the first
+% submission. Re-cite Kim 2025 (not the placeholder Kim 2024). Add the
+% disclosure paragraph about our pixel-space reimplementation of FlowDPS.
+
+Classical inverse-problem solvers rely on handcrafted regularizers and
+analytical priors. The Wiener filter solves the linear MMSE problem in
+the Fourier domain for Gaussian degradations and remains a fast,
+interpretable baseline. Deep-learning denoiser priors enabled
+Plug-and-Play~(PnP) schemes such as PnP-ADMM~\cite{chan2017pnp,zhang2017dncnn}
+that swap a proximal-step argmin for a forward pass through a pretrained
+denoiser network (e.g.~DnCNN, DRUNet). Diffusion-based posterior sampling
+generalized this idea by injecting a measurement-consistency term into
+the reverse diffusion process: DDRM~\cite{kawar2022ddrm} uses spectral
+projection in the SVD basis of $A$, and DPS~\cite{chung2023dps} uses a
+likelihood-gradient term computed via Tweedie's clean-image estimate.
+
+Flow Matching and Rectified Flow~\cite{lipman2023flow,liu2023rectified}
+recently emerged as deterministic alternatives to DDPMs, learning a
+velocity field whose ODE integration straightens the noise-to-data path
+and can in principle achieve comparable image quality with fewer
+function evaluations. FlowDPS~\cite{kim2025flowdps} adapts DPS-style
+likelihood guidance to flow models by injecting a likelihood-gradient
+correction into the deterministic velocity field. The official FlowDPS
+implementation is built on the SD3 latent transformer flow model and
+operates at $768 \times 768$ in latent space.
+
+To enable a like-for-like pixel-space comparison against Pixel-DPS, we
+reimplement the FlowDPS likelihood-corrected velocity update,
+\begin{equation}
+  v_\text{eff}(x_t, t) = v_\theta(x_t, t) - \zeta \nabla_{x_t}
+    \| y - A( \hat z_1(x_t, t) ) \|_2,
+\end{equation}
+on top of the Liu~2023 Rectified Flow CelebA-HQ-256 NCSN++ velocity
+model, where the Tweedie clean-image identity for rectified flow is
+$\hat z_1(x_t, t) = x_t + (1 - t)\,v_\theta(x_t, t)$.
+
+% =====================================================================
+\section{Methodology}\label{sec:method}
+
+\paragraph{Forward model.}
+$y = A x + \epsilon$, with $A$ either a Gaussian blur of standard
+deviation $\sigma_b \in \{1.5, 3.0, 5.0\}$ (main grid) or a motion blur
+$\text{motion}(L,\theta)$ with $L \in \{15, 25, 35\}$ pixels and
+$\theta \in \{0^\circ, 45^\circ\}$ (robustness study), and
+$\epsilon \sim \mathcal{N}(0, \sigma_n^2 I)$ with
+$\sigma_n \in \{0.0, 0.05\}$.
+
+\paragraph{Pixel-DPS.}
+We adopt the DDPM reverse process with DDIM sampling. At each reverse
+step $t$, the model predicts $\epsilon_\theta(x_t, t)$, from which we
+derive the Tweedie clean-image estimate
+\begin{equation}
+  \hat x_0(x_t) = \tfrac{x_t - \sqrt{1 - \bar\alpha_t}\,\epsilon_\theta(x_t, t)}{\sqrt{\bar\alpha_t}}.
+\end{equation}
+The DDIM-style reverse step is then corrected with a likelihood gradient:
+\begin{equation}
+  x_{t-1} = x_{t-1}^{\text{DDIM}} - \zeta \nabla_{x_t} \| y - A(\hat x_0(x_t)) \|_2.
+\end{equation}
+Two implementation choices matter substantially. First, we use the
+\textbf{L2 norm} (not the squared L2) of the residual; squaring the
+residual and dividing by $\sigma_n^2$ blows up the gradient and prevents
+convergence (verified empirically in our EXP-001 ablation). Second, we do
+\textbf{not clamp} $\hat x_0$ inside the gradient path; clamping zeroes
+the gradient for any pixel outside $[-1, 1]$, which kills DPS at early
+timesteps when $\hat x_0$ is necessarily far from the data manifold.
+Clamping is applied only at the final returned tensor.
+
+\paragraph{FlowDPS-on-RF.}
+We use the Liu~2023 CelebA-HQ-256 1-Rectified Flow checkpoint, which
+provides a learned velocity field $v_\theta(x_t, t)$ over continuous time
+$t \in [0,1]$, with $x_0 \sim \mathcal{N}(0, I)$ at $t = 0$ and $x \sim p_\text{data}$
+at $t = 1$. Sampling proceeds by forward Euler integration over a uniform
+$N$-step grid in $[\epsilon, 1 - \epsilon]$, with FlowDPS guidance:
+\begin{equation}
+  v_\text{eff}(x_t, t) = v_\theta(x_t, t) - \zeta \nabla_{x_t} \| y - A(\hat z_1(x_t, t)) \|_2,
+  \qquad
+  x_{t + dt} = x_t + dt \cdot v_\text{eff}(x_t, t).
+\end{equation}
+The clean-image estimate $\hat z_1 = x_t + (1-t) v_\theta(x_t, t)$ is RF's
+Tweedie identity. Our reimplementation lives in
+\verb|src/samplers/flowdps_rf.py| in the project repository.
+
+\paragraph{Baselines.}
+\begin{itemize}[leftmargin=*,itemsep=2pt]
+  \item \textbf{Wiener filter:} per-channel 2-D Wiener deconvolution in
+    the Fourier domain, with noise-to-signal scalar $K = 10^{-3}$ for
+    $\sigma_n = 0$ and $K = 5 \cdot 10^{-2}$ for $\sigma_n = 0.05$ (tuned
+    on a 2-image validation).
+  \item \textbf{DnCNN$+$PnP-ADMM:} PnP-ADMM in the Fourier domain with
+    deepinv's pretrained 3-channel blind Gaussian DnCNN (668\,k
+    parameters) as the denoiser. $24$ outer iterations, $\rho = 2.0$,
+    descending denoiser-$\sigma$ schedule with $\sigma_\text{max} =
+    \max(0.10, 4\sigma_n + 0.05)$ and $\sigma_\text{min} =
+    \max(0.02, \sigma_n)$.
+\end{itemize}
+
+% PORTING NOTE: include the disclosure paragraph about the DDRM attempt
+% that we parked (see REPORT_DRAFT.md Section 4 audit).
+
+\paragraph{Implementation details.}
+All experiments run on a single \textbf{NVIDIA RTX 3060 12\,GB} GPU.
+Models load via Hugging Face's \texttt{diffusers} 0.30.1 on PyTorch
+2.4.1$+$cu121. The CelebA-HQ-256 DDPM checkpoint is
+\texttt{google/ddpm-ema-celebahq-256} (113\,M parameters); the
+Rectified Flow checkpoint is the public CelebA-HQ-256 release from the
+\texttt{gnobitab/RectifiedFlow} repository (65.5\,M parameters, NCSN$++$
+architecture, JIT-compiled \texttt{upfirdn2d} CUDA op). LPIPS uses the
+AlexNet backbone via the standard \texttt{lpips} package. Wall-clock
+timings use CUDA events.
+
+% =====================================================================
+\section{Experimental Design}\label{sec:expdesign}
+
+\paragraph{Dataset.}
+We use 200 CelebA-HQ images from the validation split of the public
+\texttt{korexyz/celeba-hq-256x256} dataset on Hugging Face. The first
+50 images are used for the main experimental grid and the robustness
+study. The 200-image set size is set by our compute envelope on the
+RTX 3060 12\,GB; we disclose this explicitly so per-cell error bars
+reflect this sample size.
+
+\paragraph{Configuration matrix.}
+\begin{table}[h]
+  \centering
+  \caption{Experimental configuration matrix.}
+  \label{tab:config}
+  \begin{tabular}{lll}
+    \toprule
+    Parameter & Values & Cells \\
+    \midrule
+    Gaussian blur $\sigma_b$ & $\{1.5, 3.0, 5.0\}$ & 3 \\
+    Additive noise $\sigma_n$ & $\{0.0, 0.05\}$ & 2 \\
+    NFE budget & $\{25, 50, 100\}$ & 3 \\
+    Method & \{Pixel-DPS, FlowDPS-on-RF\} & 2 \\
+    \midrule
+    Total main-grid conditions & $3 \cdot 2 \cdot 3 \cdot 2 = 36$ & — \\
+    Images per cell & $50$ & — \\
+    Total reconstructions (main grid) & $1{,}800$ & — \\
+    \midrule
+    Robustness: motion length $L$ & $\{15, 25, 35\}$ & 3 \\
+    Robustness: motion angle $\theta$ & $\{0^\circ, 45^\circ\}$ & 2 \\
+    Robustness: NFE & $50$ (fixed) & — \\
+    Total robustness reconstructions & $3 \cdot 2 \cdot 2 \cdot 2 \cdot 50 = 1{,}200$ & — \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\paragraph{Hyperparameter tuning.}
+Guidance scale $\zeta$ tuned on a 2-image held-out subset (EXP-001 for
+Pixel-DPS, EXP-006/007 for FlowDPS-on-RF). Locked values:
+$\zeta = 10$ for Pixel-DPS, $\zeta = 100$ for FlowDPS-on-RF. Both are
+monotonic-best in their respective ranges; values past these begin to
+hurt quality.
+
+\paragraph{Metrics.}
+PSNR (dB, on $[0,1]$ range), SSIM (PyTorch native implementation), LPIPS
+(AlexNet backbone), and wall-clock seconds per image. Higher is better
+for PSNR/SSIM; lower for LPIPS and time.
+
+% =====================================================================
+\section{Results and Findings}\label{sec:results}
+
+% PORTING NOTE: this entire section discards the fabricated Section 5
+% from the first submission. All numbers below are measured.
+
+\subsection{Main grid — matched Gaussian blur}
+
+% TODO: \input{../outputs/figures/main_grid_summary.tex}  (generated)
+% Or paste the table from outputs/figures/main_grid_summary.md directly.
+
+Table~\ref{tab:main_nfe100} shows per-cell mean PSNR/SSIM/LPIPS at
+NFE${=}100$ for both methods; the full table including NFE${=}25,50$
+is in the supplementary material.
+
+\begin{table}[h]
+  \centering
+  \caption{Main-grid PSNR / SSIM / LPIPS at NFE${=}100$ (mean over 50 images per cell).}
+  \label{tab:main_nfe100}
+  \begin{tabular}{llrrrrr}
+    \toprule
+    Method & $\sigma_b$ & $\sigma_n$ & PSNR (dB) & SSIM & LPIPS & s/img \\
+    \midrule
+    Pixel-DPS     & 1.5 & 0.00 & \textbf{28.61} & \textbf{0.821} & \textbf{0.084} & 19.0 \\
+    Pixel-DPS     & 1.5 & 0.05 & 26.21 & 0.686 & 0.136 & 17.9 \\
+    Pixel-DPS     & 3.0 & 0.00 & 27.15 & 0.775 & 0.117 & 18.0 \\
+    Pixel-DPS     & 3.0 & 0.05 & 26.25 & 0.741 & 0.146 & 17.9 \\
+    Pixel-DPS     & 5.0 & 0.00 & 26.21 & 0.746 & 0.155 & 17.9 \\
+    Pixel-DPS     & 5.0 & 0.05 & 25.33 & 0.721 & 0.190 & 18.1 \\
+    FlowDPS-on-RF & 1.5 & 0.00 & 26.23 & 0.736 & 0.153 & 23.5 \\
+    FlowDPS-on-RF & 1.5 & 0.05 & 23.65 & 0.570 & 0.268 & 23.5 \\
+    FlowDPS-on-RF & 3.0 & 0.00 & 24.26 & 0.667 & 0.170 & 23.7 \\
+    FlowDPS-on-RF & 3.0 & 0.05 & 22.58 & 0.576 & 0.234 & 23.9 \\
+    FlowDPS-on-RF & 5.0 & 0.00 & 22.48 & 0.601 & 0.200 & 23.8 \\
+    FlowDPS-on-RF & 5.0 & 0.05 & 21.13 & 0.537 & 0.251 & 24.0 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=\textwidth]{psnr_vs_nfe}
+  \caption{PSNR vs NFE across all six (matched) degradation conditions.
+    FlowDPS-on-RF saturates immediately; Pixel-DPS keeps improving.}
+  \label{fig:psnr_vs_nfe}
+\end{figure}
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.7\textwidth]{psnr_delta_heatmap}
+  \caption{Per-cell PSNR advantage of Pixel-DPS over FlowDPS-on-RF.
+    The gap widens with task difficulty, from $+1.4$\,dB at the easiest
+    cell to $+4.2$\,dB at the hardest.}
+  \label{fig:psnr_delta_heatmap}
+\end{figure}
+
+\paragraph{Headline findings (matched Gaussian).}
+\begin{enumerate}[leftmargin=*,itemsep=2pt]
+  \item \textbf{Pixel-DPS dominates at every cell}, by $+1.4$ to
+    $+4.2$\,dB PSNR. The gap grows with $\sigma_b$ and with
+    $\sigma_n = 0.05$ vs.~$0.0$.
+  \item \textbf{FlowDPS-on-RF saturates with NFE}: at
+    $(\sigma_b{=}1.5, \sigma_n{=}0)$ the PSNR averages
+    $26.08, 26.08, 26.23$\,dB across NFE${\in}\{25, 50, 100\}$.
+    Pixel-DPS at the same cell: $27.51, 28.34, 28.61$\,dB — monotonic.
+  \item \textbf{Pixel-DPS is also faster per image} on this hardware
+    ($\sim$18\,s vs $\sim$24\,s at NFE${=}100$), reversing the
+    proposal's hypothesized flow-speed advantage.
+\end{enumerate}
+
+\subsection{Operator-mismatch robustness study}
+
+The true forward operator is $\text{motion}(L, \theta)$ but the sampler's
+likelihood assumes Gaussian with fixed $\sigma_b{=}3.0$. 50 images per
+cell, $3 \times 2 \times 2 = 12$ cells per method, NFE${=}50$.
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.9\textwidth]{matched_vs_mismatched}
+  \caption{Operator-mismatch cost ($\sigma_n{=}0.05$, NFE${=}50$).
+    Pixel-DPS drops $\sim$5\,dB from matched Gaussian to severe motion
+    ($L{=}35$); FlowDPS-on-RF drops only $\sim$2.5\,dB.}
+  \label{fig:matched_vs_mismatched}
+\end{figure}
+
+\paragraph{Headline finding (robustness).}
+\textbf{FlowDPS-on-RF is more robust to operator mismatch than
+Pixel-DPS.} Going from matched Gaussian ($\sigma_b{=}3, \sigma_n{=}0.05,$
+NFE${=}50$) to the hardest motion case ($L{=}35, \theta{=}45^\circ$):
+\begin{itemize}[leftmargin=*,itemsep=2pt]
+  \item Pixel-DPS: $25.72 \to 20.86$\,dB ($\boldsymbol{-4.86}$\,dB).
+  \item FlowDPS-on-RF: $22.40 \to 19.92$\,dB ($\boldsymbol{-2.48}$\,dB).
+\end{itemize}
+The matched-condition $+3.3$\,dB Pixel-DPS advantage shrinks to
+$+0.9$\,dB at the hardest mismatched cell. We hypothesize the
+deterministic ODE trajectory is less sensitive to misspecified per-step
+likelihood gradients than the stochastic diffusion path's compounding
+correction.
+
+\subsection{Classical and supervised baselines}
+
+\begin{table}[h]
+  \centering
+  \caption{Four-method comparison at $\sigma_n{=}0.05$, NFE${=}100$ where
+    applicable. Per-method mean over 50 images per cell.}
+  \label{tab:baselines}
+  \begin{tabular}{lrrrr}
+    \toprule
+    $\sigma_b$ & Wiener & DnCNN$+$PnP-ADMM & FlowDPS-on-RF & Pixel-DPS \\
+    \midrule
+    1.5 & 24.28 & 24.61 & 23.65 & \textbf{26.21} \\
+    3.0 & 24.03 & 24.31 & 22.58 & \textbf{26.25} \\
+    5.0 & 22.50 & 22.81 & 21.13 & \textbf{25.33} \\
+    \midrule
+    s/img & 0.02 & 0.30 & 23.5 & 17.9 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Three orders of magnitude in compute for roughly $2$\,dB in PSNR. The
+DnCNN$+$PnP baseline beats our FlowDPS reimplementation in $5/6$
+$\sigma_n{=}0.05$ cells while running $\sim$60$\times$ faster than DPS.
+Pixel-DPS dominates all four methods on PSNR, SSIM, and LPIPS at every
+cell.
+
+% =====================================================================
+\section{Discussion}\label{sec:discussion}
+
+% PORTING NOTE: see REPORT_DRAFT.md Section 6 for the full bullet list
+% of corrections vs. the first submission's Discussion.
+
+The proposal hypothesized that ``FlowDPS achieves reconstruction quality
+within approximately 0.5--1.1\,dB PSNR of DPS while offering a substantial
+$2$--$5\times$ reduction in computational cost.'' Our measurements
+\emph{contradict both halves} of this claim on the CelebA-HQ-256
+pixel-space comparison: (i) the PSNR gap is $+1.4$ to $+4.2$\,dB in
+Pixel-DPS's favor, $2$--$4\times$ wider than predicted; and (ii)
+Pixel-DPS is also faster per image at NFE${=}100$ on the RTX 3060,
+reversing the speed ordering. The flow model's expected efficiency
+advantage does not manifest in this regime; the RF velocity-field
+NCSN$++$ forward pass is more expensive per step than the DDPM's
+$\epsilon$ prediction, and at NFE${=}100$ both methods are far from any
+flow-saturation regime where the straight-line trajectory would pay off
+relative to a stochastic diffusion path.
+
+However, the comparison \emph{reverses} under operator mismatch.
+Pixel-DPS degrades by $\sim$5\,dB PSNR going from matched Gaussian to
+severe motion-blur measurements, versus only $\sim$2.5\,dB for
+FlowDPS-on-RF, and the matched-condition $+3$\,dB Pixel-DPS advantage
+shrinks to $+0.9$\,dB at the hardest mismatched cell. This is the
+\emph{opposite} of the proposal's hypothesis (which we had borrowed from
+prior intuition that stochastic diffusion offers ``implicit
+regularization'' against operator misspecification).
+
+\paragraph{Limitations.}
+(i)~50 images per cell — error bars are reported as $\pm\sigma$ in the
+supplementary tables. (ii)~Single dataset (CelebA-HQ-256 faces).
+(iii)~Single forward-operator family per study (Gaussian / motion blur).
+(iv)~Our DDRM reimplementation did not reach competitive PSNR in the
+available time (it collapsed to $\sim$14\,dB even at the easiest cell);
+we report DnCNN$+$PnP-ADMM as the analogous classical-prior reference
+instead. The parked DDRM code is preserved in the repository for future
+investigation. (v)~The Liu~2023 RF checkpoint's EMA weights are not
+loaded due to a shadow-params count mismatch in the released file; we
+use the non-EMA \texttt{model} state-dict, which may contribute
+$\leq 0.5$\,dB to the FlowDPS gap.
+
+\paragraph{Future work.}
+A clean DDRM implementation would close one gap in our baseline coverage.
+Investigating Kim~2025's per-step \texttt{step\_size} parameter or a
+learned ODE-time schedule might close some of the Pixel-DPS vs
+FlowDPS-on-RF matched-grid gap. Finally, repeating the comparison on
+non-face datasets (LSUN-Church, DIV2K) would test how much of the
+Pixel-DPS dominance is dataset-specific.
+
+% =====================================================================
+\section{Conclusion}\label{sec:conclusion}
+
+We presented a controlled, pixel-space comparison of Diffusion Posterior
+Sampling and a from-scratch reimplementation of FlowDPS-style guidance
+on a Rectified Flow CelebA-HQ-256 prior. Pixel-DPS dominates the
+matched-Gaussian comparison by $1.4$--$4.2$\,dB PSNR across an
+$18$-condition grid, but FlowDPS-on-RF is more robust to operator
+mismatch ($-2.5$\,dB drop vs.\ Pixel-DPS's $-5$\,dB drop under severe
+motion-blur measurement mismatch). All four methods comfortably beat a
+Wiener-filter baseline; DnCNN$+$PnP-ADMM sits in the efficient middle of
+the Pareto frontier, beating FlowDPS-on-RF in $5/6$ noisy cells while
+running $\sim$60$\times$ faster than DPS. The findings give concrete
+guidance for choosing between these methods under known versus uncertain
+forward operators: prefer DPS when the operator is calibrated; consider
+flow-based posterior sampling when the operator may be mis-specified.
+
+% =====================================================================
+\begin{thebibliography}{99}
+
+\bibitem{chung2023dps}
+H.~Chung, J.~Kim, M.~T.~Mccann, M.~L.~Klasky, and J.~C.~Ye.
+\emph{Diffusion Posterior Sampling for General Noisy Inverse Problems}.
+ICLR 2023.
+
+\bibitem{kim2025flowdps}
+J.~Kim, B.~S.~Kim, and J.~C.~Ye.
+\emph{FlowDPS: Flow-Driven Posterior Sampling for Inverse Problems}.
+ICCV 2025. arXiv:2503.08136.
+
+\bibitem{liu2023rectified}
+X.~Liu, C.~Gong, and Q.~Liu.
+\emph{Flow Straight and Fast: Learning to Generate and Transfer Data
+with Rectified Flow}. ICLR 2023.
+
+\bibitem{lipman2023flow}
+Y.~Lipman, R.~T.~Q.~Chen, H.~Ben-Hamu, M.~Nickel, and M.~Le.
+\emph{Flow Matching for Generative Modeling}. ICLR 2023.
+
+\bibitem{ho2020ddpm}
+J.~Ho, A.~Jain, and P.~Abbeel.
+\emph{Denoising Diffusion Probabilistic Models}. NeurIPS 2020.
+
+\bibitem{kawar2022ddrm}
+B.~Kawar, M.~Elad, S.~Ermon, and J.~Song.
+\emph{Denoising Diffusion Restoration Models}. NeurIPS 2022.
+
+\bibitem{chan2017pnp}
+S.~H.~Chan, X.~Wang, and O.~A.~Elgendy.
+\emph{Plug-and-Play ADMM for Image Restoration: Fixed-Point Convergence
+and Applications}. IEEE Trans.~Computational Imaging 2017.
+
+\bibitem{zhang2017dncnn}
+K.~Zhang, W.~Zuo, Y.~Chen, D.~Meng, and L.~Zhang.
+\emph{Beyond a Gaussian Denoiser: Residual Learning of Deep CNN for
+Image Denoising}. IEEE TIP 2017.
+
+\bibitem{esser2024sd3}
+P.~Esser et~al.
+\emph{Scaling Rectified Flow Transformers for High-Resolution Image
+Synthesis}. arXiv:2403.03206, 2024.
+
+\bibitem{hendrycks2019corrupt}
+D.~Hendrycks and T.~Dietterich.
+\emph{Benchmarking Neural Network Robustness to Common Corruptions and
+Perturbations}. ICLR 2019.
+
+\end{thebibliography}
+
+\end{document}
