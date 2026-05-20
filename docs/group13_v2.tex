@@ -428,6 +428,20 @@ $\sigma_n{=}0.05$ cells while running $\sim$60$\times$ faster than DPS.
 Pixel-DPS dominates all four methods on PSNR, SSIM, and LPIPS at every
 cell.
 
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=\textwidth]{qualitative_grid}
+  \caption{Qualitative comparison on six representative CelebA-HQ-256 test
+    images at $\sigma_b{=}3.0$, $\sigma_n{=}0.05$, NFE${=}50$. Columns:
+    clean ground truth, degraded measurement, Wiener filter,
+    DnCNN$+$PnP-ADMM, FlowDPS-on-RF, and Pixel-DPS. Numbers below each
+    reconstruction are per-image PSNR (dB). Wiener and DnCNN$+$PnP are
+    smooth but oversmooth identity-relevant detail; FlowDPS-on-RF
+    sometimes drifts to a plausible-but-wrong face; Pixel-DPS most
+    consistently recovers identity-preserving facial structure.}
+  \label{fig:qualitative_grid}
+\end{figure}
+
 % =====================================================================
 \section{Discussion}\label{sec:discussion}
 
