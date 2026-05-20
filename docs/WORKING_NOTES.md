@@ -306,6 +306,78 @@ Compute: 18 s total CPU.
   output. A finer K sweep would tighten this but doesn't change the
   qualitative ordering vs DPS / FlowDPS.
 
+### EXP-012 — DnCNN + PnP-ADMM (2026-05-20)
+
+**Setup.** Plug-and-Play ADMM in the Fourier domain with a pretrained
+3-channel DnCNN (deepinv release: 668k params, blind Gaussian denoiser).
+Outer iterations = 24, ρ = 2.0, descending denoiser-sigma schedule with
+`sigma_max = max(0.10, 4·σ_n + 0.05)` and `sigma_min = max(0.02, σ_n)`
+(noise-adaptive, tuned on a 4-image sweep).
+
+Log: `outputs/logs/exp_012_dncnn_pnp_20260520_074158.log`.
+Data: `outputs/results/baselines.csv` (300 dncnn_pnp_admm rows).
+Compute: 104 s total CPU+GPU for 300 reconstructions (~0.3 s/img).
+
+**Three-way comparison at NFE=100 (where applicable), σ_n=0.05:**
+
+| σ_b | Wiener | DnCNN+PnP | FlowDPS-on-RF | Pixel-DPS |
+|-----|--------|-----------|---------------|-----------|
+| 1.5 | 24.28  | 24.61     | 23.65         | 26.21     |
+| 3.0 | 24.03  | 24.31     | 22.58         | 26.25     |
+| 5.0 | 22.50  | 22.81     | 21.13         | 25.33     |
+
+**Takeaways.**
+- **DnCNN+PnP-ADMM beats Wiener at every cell** (always by ≥0.3 dB; up to
+  +5.5 dB at σ_b=5/σ_n=0). Slight cost in LPIPS, but PSNR/SSIM strictly
+  better.
+- **DnCNN+PnP beats FlowDPS-on-RF in 5/6 cells** and ties on the 6th.
+  Striking — a small (668k-param) classical denoiser inside PnP-ADMM
+  beats our reimplementation of a million-param flow-based posterior
+  sampler on this hardware/checkpoint.
+- **Pixel-DPS still wins across the board** by 1.6–3.4 dB PSNR.
+  Especially dominant on LPIPS (0.08–0.19 vs DnCNN+PnP's 0.25–0.57).
+- **DnCNN+PnP is ~60× faster than Pixel-DPS** (0.3 vs 18 s/img). For
+  applications where a 1–3 dB PSNR drop is acceptable, DnCNN+PnP is the
+  efficient choice.
+- **First sigma_schedule attempt was bad** (σ_max=0.10 fixed): PSNR
+  collapsed at σ_n=0.05 (16 dB). Adapting σ to noise level fixed it.
+  The hyperparameter `ρ` also matters a lot — 2.0 was 5 dB better than 0.1.
+
+### EXP-013 — DDRM-lite attempt (parked, 2026-05-20)
+
+**Setup.** Tried implementing a simplified DDRM (Kawar et al. 2022) on
+top of our existing CelebA-HQ DDPM. Approach: standard DDIM reverse
+sampling + per-step Tikhonov-regularized projection of Tweedie's x̂₀
+onto the measurement constraint in the FFT basis (where Gaussian-blur is
+diagonal). Tried two formulations:
+
+1. Hard-threshold spectral mask + (η·prior + (1-η)·measurement) blend
+   per frequency. Failed: PSNR 5–15 dB.
+2. Soft Tikhonov projection `X_proj = (conj(H)·Y + λ·X_prior) / (|H|² + λ)`
+   with λ derived from η. Also failed: similar PSNR.
+
+**Outcome.** Even at the easiest condition (σ_b=1.5, σ_n=0, eta=0.7) PSNR
+maxed out at ~14 dB, far below Wiener's 22 dB. Something in the
+interaction between the projected x̂₀ and the DDIM noise direction is
+broken; possible bugs include scale mismatch between `[-1,1]` diffusion
+space and `[0,1]` measurement space at the FFT boundary, or an
+incorrect sign in the deterministic DDIM update with modified x̂₀.
+
+Per the project notes's "if it fails twice, pivot" rule, **parking DDRM** rather
+than spending more time debugging. We already have 4 working baselines
+(Pixel-DPS, FlowDPS-on-RF, Wiener, DnCNN+PnP-ADMM) which gives a rich
+comparison for the report. The DDRM rows have been removed from
+`outputs/results/baselines.csv`.
+
+The parked code lives in `src/baselines/ddrm.py` and `scripts/run_ddrm.py`
+for future investigation if time permits or if a reviewer asks.
+
+**Reportable note:** DDRM is described in Section 4 ("Baselines") of the
+proposal/first-report; the final report should note that we attempted
+a DDRM-lite implementation but couldn't reach competitive PSNR with the
+time available, and instead included DnCNN+PnP-ADMM as the analogous
+"diffusion-prior-with-spectral-projection" reference point.
+
 ---
 
 ## Open questions / to-do
