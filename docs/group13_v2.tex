@@ -125,6 +125,22 @@ We additionally evaluate two classical baselines (Wiener,
 DnCNN$+$PnP-ADMM) and one operator-mismatch robustness study (true
 measurement is motion blur; sampler's likelihood assumes Gaussian).
 
+The study is guided by four research questions:
+\begin{enumerate}[leftmargin=*,itemsep=2pt]
+  \item \textbf{Quality.} Can a flow-based posterior sampler (FlowDPS on
+    Rectified Flow) match diffusion-based DPS in reconstruction
+    fidelity (PSNR / SSIM / LPIPS) at matched NFE budgets?
+  \item \textbf{Efficiency.} How does per-image wall-clock scale with
+    NFE for each method, and is there a regime where the deterministic
+    flow trajectory yields a measurable speed advantage?
+  \item \textbf{Robustness.} Under forward-model misspecification (true
+    measurement is motion blur, sampler's likelihood assumes Gaussian),
+    which method degrades more gracefully?
+  \item \textbf{Baselines.} How do the diffusion / flow posterior
+    samplers compare to classical (Wiener) and supervised
+    (DnCNN$+$PnP-ADMM) reconstruction baselines on identical inputs?
+\end{enumerate}
+
 The contributions of this work are:
 \begin{itemize}[leftmargin=*,itemsep=2pt]
   \item A pixel-space, fair-comparison evaluation of two posterior
@@ -132,13 +148,15 @@ The contributions of this work are:
     architectural family.
   \item Empirical evidence that, on this setup, Pixel-DPS dominates
     FlowDPS-on-RF in the matched-Gaussian setting by 1.4--4.2\,dB PSNR,
-    while FlowDPS-on-RF degrades less under operator mismatch.
+    while FlowDPS-on-RF degrades less under operator mismatch ---
+    reversing the matched-condition ordering.
   \item A four-method (Wiener, DnCNN$+$PnP, FlowDPS-on-RF, Pixel-DPS)
-    Pareto-frontier characterization across three orders of magnitude of
-    per-image compute.
+    Pareto-frontier characterization across three orders of magnitude
+    of per-image compute.
   \item A reproducible open-source pipeline at
     \url{https://github.com/adnan821/dps_flowdps}, including the 3{,}600
-    measured rows and per-experiment logs.
+    measured rows, all per-experiment logs, and the full LaTeX source
+    for this report.
 \end{itemize}
 
 % =====================================================================
@@ -169,6 +187,22 @@ likelihood guidance to flow models by injecting a likelihood-gradient
 correction into the deterministic velocity field. The official FlowDPS
 implementation is built on the SD3 latent transformer flow model and
 operates at $768 \times 768$ in latent space.
+
+Beyond DPS-style likelihood-gradient guidance, several recent works
+explore alternative posterior-sampling regimes for diffusion- and
+flow-based priors. Meanti et~al.~\cite{meanti2025dim} cast the
+inverse problem as distribution matching between a parameterized
+sampler and a target conditioned on the measurement, avoiding explicit
+likelihood gradients. Dou et~al.~\cite{dou2026particle} propose a
+\emph{gradient-free} constrained-particle approach that solves
+diffusion inverse problems using only forward passes through the
+score / flow network, side-stepping the cost of backpropagating through
+the model that DPS-style methods incur. Dasgupta et~al.~\cite{dasgupta2026pcfm}
+study \emph{physics-constrained} conditional flow matching for inverse
+problems with hard physical constraints (e.g.\ PDE residuals), where
+posterior-sample physical validity matters as much as image quality.
+Our work uses gradient-based DPS / FlowDPS guidance; we leave a
+gradient-free or physics-constrained variant to future work.
 
 To enable a like-for-like pixel-space comparison against Pixel-DPS, we
 reimplement the FlowDPS likelihood-corrected velocity update,
@@ -265,7 +299,6 @@ study. The 200-image set size is set by our compute envelope on the
 RTX 3060 12\,GB; we disclose this explicitly so per-cell error bars
 reflect this sample size.
 
-\paragraph{Configuration matrix.}
 \begin{table}[h]
   \centering
   \caption{Experimental configuration matrix.}
@@ -299,9 +332,48 @@ monotonic-best in their respective ranges; values past these begin to
 hurt quality.
 
 \paragraph{Metrics.}
-PSNR (dB, on $[0,1]$ range), SSIM (PyTorch native implementation), LPIPS
-(AlexNet backbone), and wall-clock seconds per image. Higher is better
-for PSNR/SSIM; lower for LPIPS and time.
+We report PSNR (dB, on the $[0, 1]$ range), SSIM (a PyTorch-native
+implementation matching the conventional Gaussian-windowed formula),
+and LPIPS (AlexNet backbone via the standard \texttt{lpips} package).
+Higher is better for PSNR / SSIM; lower for LPIPS. Computational
+efficiency is reported as wall-clock seconds per image (CUDA-event
+timed, excluding I/O) and the number of neural function evaluations
+(NFE) per reconstruction. We omit Kernel Inception Distance (KID),
+which the proposal listed: distributional metrics over 50 samples per
+cell are too noisy to be informative, and our paired-image PSNR / SSIM
+/ LPIPS already capture the same quality axes.
+
+\paragraph{Baselines.}
+To contextualize the DPS / FlowDPS comparison we include two non-
+diffusion baselines:
+\begin{itemize}[leftmargin=*,itemsep=2pt]
+  \item \textbf{Wiener filter}: per-channel 2-D Wiener deconvolution
+    in the Fourier domain, with noise-to-signal scalar $K = 10^{-3}$
+    for $\sigma_n = 0$ and $K = 5 \cdot 10^{-2}$ for $\sigma_n = 0.05$.
+    Evaluated on the 6-cell Gaussian grid (300 reconstructions,
+    $\sim$16\,ms per image on CPU).
+  \item \textbf{DnCNN$+$PnP-ADMM}: Plug-and-Play ADMM in the Fourier
+    domain with deepinv's pretrained 3-channel blind Gaussian DnCNN
+    (668\,k parameters)~\cite{zhang2017dncnn,chan2017pnp}. 24 outer
+    iterations, $\rho = 2.0$, descending denoiser-$\sigma$ schedule
+    with $\sigma_\text{max} = \max(0.10, 4\sigma_n + 0.05)$ and
+    $\sigma_\text{min} = \max(0.02, \sigma_n)$. 300 reconstructions,
+    $\sim$0.3\,s per image on the same RTX 3060.
+\end{itemize}
+
+The first submission additionally listed DDRM~\cite{kawar2022ddrm} as a
+planned baseline. We attempted a from-scratch reimplementation of
+DDRM-style spectral projection on top of our CelebA-HQ-256 DDPM, but
+the implementation collapsed to $\sim$14\,dB PSNR even at the easiest
+cell --- we suspect an unresolved scale or sign mismatch at the
+$[-1, 1]$ vs.\ $[0, 1]$ FFT boundary. To preserve scientific honesty
+we report this attempt as a parked experiment (the code is preserved
+in the project repository for future investigation) and use
+DnCNN$+$PnP-ADMM as the supervised-classical reference in lieu of
+DDRM. We also drop the unconditional-DDPM ``lower bound'' baseline
+the proposal mentioned --- it would simply measure how far a random
+sample from the prior is from the ground truth, which the other
+baselines already bracket from above.
 
 % =====================================================================
 \section{Results and Findings}\label{sec:results}
@@ -320,24 +392,26 @@ is in the supplementary material.
 
 \begin{table}[h]
   \centering
-  \caption{Main-grid PSNR / SSIM / LPIPS at NFE${=}100$ (mean over 50 images per cell).}
+  \caption{Main-grid PSNR / SSIM / LPIPS at NFE${=}100$ (mean $\pm$ std over 50
+    images per cell; best per cell in bold).}
   \label{tab:main_nfe100}
-  \begin{tabular}{llrrrrr}
+  \begin{tabular}{llrrlrr}
     \toprule
     Method & $\sigma_b$ & $\sigma_n$ & PSNR (dB) & SSIM & LPIPS & s/img \\
     \midrule
-    Pixel-DPS     & 1.5 & 0.00 & \textbf{28.61} & \textbf{0.821} & \textbf{0.084} & 19.0 \\
-    Pixel-DPS     & 1.5 & 0.05 & 26.21 & 0.686 & 0.136 & 17.9 \\
-    Pixel-DPS     & 3.0 & 0.00 & 27.15 & 0.775 & 0.117 & 18.0 \\
-    Pixel-DPS     & 3.0 & 0.05 & 26.25 & 0.741 & 0.146 & 17.9 \\
-    Pixel-DPS     & 5.0 & 0.00 & 26.21 & 0.746 & 0.155 & 17.9 \\
-    Pixel-DPS     & 5.0 & 0.05 & 25.33 & 0.721 & 0.190 & 18.1 \\
-    FlowDPS-on-RF & 1.5 & 0.00 & 26.23 & 0.736 & 0.153 & 23.5 \\
-    FlowDPS-on-RF & 1.5 & 0.05 & 23.65 & 0.570 & 0.268 & 23.5 \\
-    FlowDPS-on-RF & 3.0 & 0.00 & 24.26 & 0.667 & 0.170 & 23.7 \\
-    FlowDPS-on-RF & 3.0 & 0.05 & 22.58 & 0.576 & 0.234 & 23.9 \\
-    FlowDPS-on-RF & 5.0 & 0.00 & 22.48 & 0.601 & 0.200 & 23.8 \\
-    FlowDPS-on-RF & 5.0 & 0.05 & 21.13 & 0.537 & 0.251 & 24.0 \\
+    Pixel-DPS     & 1.5 & 0.00 & \textbf{28.61 $\pm$ 3.18} & \textbf{0.821} & \textbf{0.084} & 19.0 \\
+    Pixel-DPS     & 1.5 & 0.05 & \textbf{26.21 $\pm$ 2.39} & \textbf{0.686} & \textbf{0.136} & 17.9 \\
+    Pixel-DPS     & 3.0 & 0.00 & \textbf{27.15 $\pm$ 2.97} & \textbf{0.775} & \textbf{0.117} & 18.0 \\
+    Pixel-DPS     & 3.0 & 0.05 & \textbf{26.25 $\pm$ 2.64} & \textbf{0.741} & \textbf{0.146} & 17.9 \\
+    Pixel-DPS     & 5.0 & 0.00 & \textbf{26.21 $\pm$ 2.72} & \textbf{0.746} & \textbf{0.155} & 17.9 \\
+    Pixel-DPS     & 5.0 & 0.05 & \textbf{25.33 $\pm$ 2.46} & \textbf{0.721} & \textbf{0.190} & 18.1 \\
+    \midrule
+    FlowDPS-on-RF & 1.5 & 0.00 & 26.23 $\pm$ 2.66 & 0.737 & 0.153 & 23.5 \\
+    FlowDPS-on-RF & 1.5 & 0.05 & 23.65 $\pm$ 1.86 & 0.570 & 0.268 & 23.5 \\
+    FlowDPS-on-RF & 3.0 & 0.00 & 24.26 $\pm$ 2.41 & 0.667 & 0.170 & 23.7 \\
+    FlowDPS-on-RF & 3.0 & 0.05 & 22.58 $\pm$ 1.96 & 0.576 & 0.234 & 23.9 \\
+    FlowDPS-on-RF & 5.0 & 0.00 & 22.48 $\pm$ 2.23 & 0.601 & 0.200 & 23.8 \\
+    FlowDPS-on-RF & 5.0 & 0.05 & 21.13 $\pm$ 1.87 & 0.537 & 0.251 & 24.0 \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -406,16 +480,17 @@ correction.
 
 \begin{table}[h]
   \centering
-  \caption{Four-method comparison at $\sigma_n{=}0.05$, NFE${=}100$ where
-    applicable. Per-method mean over 50 images per cell.}
+  \caption{Four-method PSNR comparison at $\sigma_n{=}0.05$, NFE${=}100$
+    where applicable. Per-method mean $\pm$ std over 50 images per cell;
+    best per cell in bold.}
   \label{tab:baselines}
-  \begin{tabular}{lrrrr}
+  \begin{tabular}{llll>{\bfseries}l}
     \toprule
     $\sigma_b$ & Wiener & DnCNN$+$PnP-ADMM & FlowDPS-on-RF & Pixel-DPS \\
     \midrule
-    1.5 & 24.28 & 24.61 & 23.65 & \textbf{26.21} \\
-    3.0 & 24.03 & 24.31 & 22.58 & \textbf{26.25} \\
-    5.0 & 22.50 & 22.81 & 21.13 & \textbf{25.33} \\
+    1.5 & 24.28 $\pm$ 1.29 & 24.61 $\pm$ 1.21 & 23.65 $\pm$ 1.86 & 26.21 $\pm$ 2.39 \\
+    3.0 & 24.03 $\pm$ 1.73 & 24.31 $\pm$ 1.57 & 22.58 $\pm$ 1.96 & 26.25 $\pm$ 2.64 \\
+    5.0 & 22.50 $\pm$ 1.70 & 22.81 $\pm$ 1.54 & 21.13 $\pm$ 1.87 & 25.33 $\pm$ 2.46 \\
     \midrule
     s/img & 0.02 & 0.30 & 23.5 & 17.9 \\
     \bottomrule
@@ -441,6 +516,104 @@ cell.
     consistently recovers identity-preserving facial structure.}
   \label{fig:qualitative_grid}
 \end{figure}
+
+\subsection{Posterior diversity vs.\ point accuracy}\label{sec:diversity}
+
+A high PSNR on a single sample is not the same as a good posterior
+sampler. The proposal brief (and the standard inverse-problem
+literature) emphasizes the distinction between (i) the \emph{best}
+sample from a posterior, (ii) the posterior \emph{mean}, and (iii) the
+sample \emph{diversity}. To probe this for Pixel-DPS and FlowDPS-on-RF
+we draw $N{=}8$ samples per image with different sampler seeds (the
+measurement $y$ and its noise are held fixed across seeds) on three
+representative images at $\sigma_b{=}3.0$, $\sigma_n{=}0.05$, NFE${=}50$.
+
+We report four quantities per image $\times$ method:
+\begin{itemize}[leftmargin=*,itemsep=2pt]
+  \item Single-sample PSNR (seed 100, i.e.\ what we have been calling
+    ``the reconstruction'' throughout this paper).
+  \item Mean-of-$N$ PSNR --- the PSNR of the per-pixel mean of the 8
+    sampled reconstructions. This estimates the posterior mean.
+  \item Best-of-$N$ PSNR --- the maximum per-image PSNR across the 8
+    samples (an oracle that knows the ground truth).
+  \item Pairwise mean LPIPS over $\binom{N}{2}{=}28$ sample pairs ---
+    a perceptual measure of posterior sample diversity. Higher means
+    the sampler explores more of the posterior; lower means it
+    collapses to a near-deterministic mode.
+\end{itemize}
+
+\begin{table}[h]
+  \centering
+  \caption{Posterior-diversity study at $\sigma_b{=}3.0$, $\sigma_n{=}0.05$,
+    NFE${=}50$, $N{=}8$ samples per (image, method). Mean-of-$N$ is the
+    PSNR of the per-pixel sample mean. Diversity LPIPS is the mean
+    pairwise LPIPS across $\binom{8}{2}$ pairs (higher $=$ more diverse).}
+  \label{tab:diversity}
+  \begin{tabular}{llrrrrr}
+    \toprule
+    Image & Method & Single & Mean-of-$N$ & Best-of-$N$ & Div.\ LPIPS & std map (mean) \\
+    \midrule
+    0  & Pixel-DPS     & 31.25 & 32.33 & 31.58 & 0.043 & 0.009 \\
+    0  & FlowDPS-on-RF & 27.46 & 29.38 & 27.72 & \textbf{0.233} & \textbf{0.032} \\
+    7  & Pixel-DPS     & 28.23 & 29.14 & 28.37 & 0.057 & 0.012 \\
+    7  & FlowDPS-on-RF & 24.85 & 27.09 & 25.20 & \textbf{0.151} & \textbf{0.031} \\
+    25 & Pixel-DPS     & 27.73 & 28.42 & 27.73 & 0.050 & 0.014 \\
+    25 & FlowDPS-on-RF & 24.41 & 26.68 & 25.21 & \textbf{0.142} & \textbf{0.030} \\
+    \midrule
+    \textit{average}  & Pixel-DPS     & 29.07 & 29.96 & 29.23 & 0.050 & 0.012 \\
+    \textit{average}  & FlowDPS-on-RF & 25.57 & 27.72 & 26.04 & \textbf{0.175} & \textbf{0.031} \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=\textwidth]{posterior_diversity}
+  \caption{Posterior diversity. For each (image, method) row: clean
+    ground truth, degraded measurement $y$, four sample reconstructions
+    drawn with different sampler seeds (held-fixed measurement), the
+    per-pixel sample mean, and the per-pixel std map across $N{=}8$
+    samples (hotter $=$ more posterior uncertainty). Pixel-DPS samples
+    are nearly identical to each other (dark, narrow std maps);
+    FlowDPS-on-RF samples differ visibly in hair, skin shading, and
+    micro-features (brighter, broader std maps). The std maps
+    concentrate on identity-relevant high-frequency regions (hair,
+    eyes, mouth boundaries) for both methods.}
+  \label{fig:diversity}
+\end{figure}
+
+\paragraph{Headline findings (diversity).}
+\begin{enumerate}[leftmargin=*,itemsep=2pt]
+  \item \textbf{Pixel-DPS is near-deterministic across seeds.} Pairwise
+    LPIPS across 8 samples is $0.05$ on average, and the per-pixel std
+    map averages $0.012$ on the $[0, 1]$ scale --- the sampler is
+    essentially collapsing to a single posterior mode. This is the
+    failure mode the inverse-problem literature warns about: high
+    single-sample PSNR can coexist with poor posterior coverage.
+  \item \textbf{FlowDPS-on-RF samples are 3--4$\times$ more diverse}
+    (LPIPS $0.175$, std mean $0.031$). Different seeds yield visibly
+    different hair, skin shading, and micro-features (Figure~\ref{fig:diversity}).
+  \item \textbf{The posterior mean strictly improves PSNR} for both
+    methods, but the gain is much larger for FlowDPS-on-RF (mean-of-8
+    minus single $= {+}2.15$\,dB) than for Pixel-DPS ($+0.89$\,dB).
+    This is the classic Bayesian gain from averaging out independent
+    sample noise; FlowDPS-on-RF benefits more precisely because its
+    individual samples are noisier (more diverse).
+  \item \textbf{Best-of-$N$ is barely above single-sample for either
+    method.} The 8 samples cluster too tightly around the modal
+    estimate to yield large best-case improvements. A best-of-1000
+    study or a learned sample selector might change this.
+\end{enumerate}
+
+Reading these together: the matched-Gaussian PSNR / SSIM / LPIPS
+advantage Pixel-DPS holds in Tables~\ref{tab:main_nfe100}
+and~\ref{tab:baselines} is partly a single-sample-point estimate
+advantage rather than a true posterior-sampling advantage. From a
+Bayesian inverse-problem perspective, FlowDPS-on-RF is
+\emph{producing} a posterior; Pixel-DPS is producing a
+\emph{maximum-a-posteriori-like point estimate}. Which is preferable
+depends on whether downstream use cares about modal accuracy or
+uncertainty awareness.
 
 % =====================================================================
 \section{Discussion}\label{sec:discussion}
@@ -470,6 +643,38 @@ shrinks to $+0.9$\,dB at the hardest mismatched cell. This is the
 \emph{opposite} of the proposal's hypothesis (which we had borrowed from
 prior intuition that stochastic diffusion offers ``implicit
 regularization'' against operator misspecification).
+
+\paragraph{Point estimate vs.\ posterior sampling.}
+The posterior-diversity study in \S\ref{sec:diversity} adds a third
+axis to the comparison that the headline PSNR / SSIM / LPIPS numbers
+hide. Pixel-DPS's pairwise sample LPIPS across 8 seeds is $\sim$0.05
+on average --- the sampler is near-deterministic, collapsing to a
+single modal estimate. FlowDPS-on-RF's pairwise sample LPIPS is
+$\sim$0.18, a 3.5$\times$ broader posterior. Read together with the
+matched-Gaussian PSNR table, this means \emph{Pixel-DPS's single-sample
+PSNR advantage is partly a point-estimate advantage}, not a true
+posterior-sampling advantage. The classical Bayesian-inverse-problems
+critique --- that a sharp single sample with poor diversity is not the
+same as a well-calibrated posterior --- applies here. From a downstream
+perspective: if the application wants a single best-guess
+reconstruction, Pixel-DPS dominates; if it wants samples that reflect
+genuine measurement uncertainty (e.g.\ for downstream Bayesian
+inference, uncertainty-aware decision making, or scientific imaging
+where physically valid \emph{distributions} matter as much as image
+quality), FlowDPS-on-RF is the better-calibrated sampler, despite its
+worse point-estimate PSNR.
+
+\paragraph{Gradient-based vs.\ gradient-free guidance.}
+Both methods compared here are \emph{gradient-based}: they backpropagate
+the measurement-likelihood gradient through the model at every step,
+which roughly doubles the per-step compute relative to a forward-only
+pass. Recent work~\cite{dou2026particle} proposes \emph{gradient-free}
+constrained-particle methods that solve diffusion inverse problems
+using only forward passes through the score / flow network. Comparing
+gradient-based DPS against a gradient-free variant on the same
+pixel-space DDPM backbone would isolate exactly how much of our
+20-second-per-image cost is attributable to the autograd backward
+pass, and is a clear direction for follow-up work.
 
 \paragraph{Limitations.}
 (i)~50 images per cell — error bars are reported as $\pm\sigma$ in the
@@ -560,6 +765,21 @@ Synthesis}. arXiv:2403.03206, 2024.
 D.~Hendrycks and T.~Dietterich.
 \emph{Benchmarking Neural Network Robustness to Common Corruptions and
 Perturbations}. ICLR 2019.
+
+\bibitem[Meanti et~al.(2025)]{meanti2025dim}
+G.~Meanti et~al.
+\emph{Unsupervised Imaging Inverse Problems with Diffusion Distribution
+Matching}. ICCV 2025.
+
+\bibitem[Dou et~al.(2026)]{dou2026particle}
+H.~Dou et~al.
+\emph{Constrained Particle Seeking: Solving Diffusion Inverse Problems
+with Just Forward Passes}. arXiv:2603.01837, 2026.
+
+\bibitem[Dasgupta et~al.(2026)]{dasgupta2026pcfm}
+A.~Dasgupta et~al.
+\emph{Solving Physics-Constrained Inverse Problems with Conditional
+Flow Matching}. arXiv:2603.14135, 2026.
 
 \end{thebibliography}
 
