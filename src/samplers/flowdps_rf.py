@@ -55,6 +55,7 @@ class FlowDPSRF:
         eps_t: float = 1e-3,
         seed: Optional[int] = 0,
         verbose: bool = False,
+        spectral_weight: Optional[torch.Tensor] = None,
     ) -> FlowDPSResult:
         """Sample x ~ p(x | y) with FlowDPS-on-RF.
 
@@ -70,6 +71,7 @@ class FlowDPSRF:
             seed: per-call RNG seed for the initial noise draw.
         """
         from src.samplers.schedules import resolve as _resolve_zeta
+        from src.samplers.spectral_weight import spectral_residual_l2
         import time
 
         B, C, H, W = y.shape
@@ -105,7 +107,8 @@ class FlowDPSRF:
             z1_hat_pix = (z1_hat + 1.0) / 2.0
             y_hat = forward_op(z1_hat_pix)
             residual = y_hat - y
-            loss = torch.linalg.norm(residual.flatten(1), dim=1).sum()
+            # Optional FFT-domain reweighting for Tier-B spectral guidance.
+            loss = spectral_residual_l2(residual, spectral_weight)
             grad = torch.autograd.grad(loss, x, retain_graph=False)[0]
             grad_norm = grad.flatten(1).norm(dim=1).mean().item()
 

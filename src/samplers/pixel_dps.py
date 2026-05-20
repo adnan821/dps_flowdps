@@ -74,6 +74,7 @@ class PixelDPS:
         sigma_y: float = 0.05,
         seed: Optional[int] = 0,
         verbose: bool = False,
+        spectral_weight: Optional[torch.Tensor] = None,
     ) -> DPSResult:
         """Run DPS to recover `x` from a measurement `y = A(x) + noise`.
 
@@ -92,6 +93,7 @@ class PixelDPS:
         """
         import time
         from src.samplers.schedules import resolve as _resolve_zeta
+        from src.samplers.spectral_weight import spectral_residual_l2
 
         B = y.shape[0]
         y = y.to(self.device)
@@ -128,7 +130,10 @@ class PixelDPS:
             # Chung et al. 2023 use the L2 norm (not squared) for the
             # likelihood gradient. This keeps the gradient magnitude bounded
             # and lets a fixed zeta work across all timesteps.
-            loss = torch.linalg.norm(residual.flatten(1), dim=1).sum()
+            # If `spectral_weight` is provided, the residual is FFT-reweighted
+            # before the L2 norm; default None preserves the pre-Tier-B
+            # spatial-domain behavior bit-for-bit.
+            loss = spectral_residual_l2(residual, spectral_weight)
             grad = torch.autograd.grad(loss, x, retain_graph=False)[0]
             grad_norm = grad.flatten(1).norm(dim=1).mean().item()
 
