@@ -378,6 +378,198 @@ a DDRM-lite implementation but couldn't reach competitive PSNR with the
 time available, and instead included DnCNN+PnP-ADMM as the analogous
 "diffusion-prior-with-spectral-projection" reference point.
 
+### EXP-014 — Tier A: EMA-aligned weights + zeta schedules + ops_fft refactor (2026-05-20)
+
+**Goal.** Three coupled improvements: (i) load the Liu 2023 RF EMA
+weights properly (the v1 baseline used the non-EMA `model` state-dict
+because the EMA `shadow_params` count is off by one); (ii) accept a
+callable `zeta(step, num_steps) → float` schedule in both samplers;
+(iii) refactor the FFT-OTF utilities into a shared module so Tier B
+and Tier C can build on it.
+
+**Commit:** `503b94f` on `feature/publication-improvements`.
+
+#### A1. EMA off-by-one diagnosis
+
+Inspected `external/RectifiedFlow/.../models/ema.py:30` — gnobitab's
+`ExponentialMovingAverage` builds `shadow_params = [p for p in
+parameters if p.requires_grad]`. Cross-checked NCSN++'s param list:
+`all_modules.0.W` (the Gaussian Fourier-features projection from
+`external/RectifiedFlow/.../layerspp.py:37`) is registered as
+`nn.Parameter(..., requires_grad=False)` — explicitly frozen at
+construction. That's the missing 645th param.
+
+**Bug we found while fixing it:** the frozen Fourier-W is `randn`'d at
+construction time, so each `NCSNpp(cfg)` instantiation draws a
+*different* `W` matrix. v1 (non-EMA path) copies the trained `W` from
+the raw `model` state-dict; an early attempt at EMA loading skipped
+it entirely, leaving the freshly-random `W` in place → catastrophic
+PSNR of **7.76 dB** at our standard test cell. Fix: in the EMA path,
+also copy frozen params from the raw `model` state-dict separately.
+
+New API: `load_rf_model(..., use_non_ema: bool=False)`. Default loads
+EMA (with the frozen-W copy); `use_non_ema=True` matches v1.
+
+#### A2. ζ schedule infrastructure
+
+New module `src/samplers/schedules.py` exposing:
+- `zeta_constant(zeta_0)`, `zeta_power(zeta_0, alpha)` (decay),
+  `zeta_ramp(zeta_0, alpha)` (ramp-up), `zeta_linear_warmup_then_decay`.
+- `resolve(zeta_or_callable, i, N) → float`.
+- `stringify(zeta) → str` for CSV cells (so resume stays idempotent
+  even with callable schedules).
+
+Both `PixelDPS.sample()` and `FlowDPSRF.sample()` now accept
+`zeta: float | ZetaSchedule`. Scalar path is bit-identical to
+pre-refactor; 22 backcompat tests in
+`tests/test_sampler_backcompat.py` pin the contract.
+
+#### A3. ops_fft module
+
+Lifted `_gaussian_kernel_torch` + `_otf` out of
+`src/baselines/{pnp_admm,ddrm}.py` (where they were duplicated) into
+new `src/forward/ops_fft.py`. Added `gaussian_otf`, `motion_blur_otf`
+for Tier B/C. The two baseline files now import from there with thin
+backward-compat wrappers.
+
+#### Hyperparameter tuning (2-image validation @ σ_b=3, σ_n=0.05, NFE=50)
+
+**Pixel-DPS (DDPM is already EMA — only ζ to tune):**
+
+| zeta value         | PSNR (dB) |
+|--------------------|-----------|
+| 10 (v1)            | 28.14     |
+| 15                 | 28.92     |
+| 20                 | 29.30     |
+| 25                 | 29.49     |
+| 30 (locked v2)     | 29.49     |
+| 40 (peak)          | 29.74     |
+| 50 (over-aggressive)| 27.98    |
+
+Locked **scalar ζ=30** (middle of broad ζ=25..40 plateau, robust to
+condition shift). Tested ramp/power schedules; all hurt for Pixel-DPS.
+
+**FlowDPS-on-RF (with EMA load):**
+
+| zeta config                        | PSNR (dB) |
+|------------------------------------|-----------|
+| non-EMA + scalar 100 (v1)          | 23.45     |
+| EMA + scalar 100                   | 23.60     |
+| EMA + scalar 200                   | 23.91     |
+| EMA + zeta_power(100, α=1)         | 22.21     |
+| EMA + zeta_power(100, α=2)         | 21.27     |
+| EMA + zeta_ramp(200, α=1)          | 21.39     |
+| EMA + zeta_ramp(300, α=1)          | 23.90     |
+| EMA + zeta_ramp(500, α=2)          | 20.99     |
+| EMA + **zeta_ramp(200, α=0.5)** (locked v2) | **24.43** |
+
+Locked **EMA + zeta_ramp(200, α=0.5)**. RF needs *more* guidance at
+late (data-side / t→1) steps, not less — opposite of the
+"guide more early" heuristic that the decay schedules implement.
+Diffusion-style power decays universally hurt.
+
+#### v2 method names registered
+
+- `pixel_dps_v2`: same diffusers DDPM, scalar ζ=30.
+- `flowdps_rf_v2`: EMA-loaded NCSN++ + `zeta_ramp(200, 0.5)`.
+
+#### Overnight grid
+
+Launched 2026-05-20 ~11:55 local as PID 105977 (detached). Writes
+`pixel_dps_v2` + `flowdps_rf_v2` rows to
+`outputs/results/main_grid.csv` across the full 18-condition grid ×
+50 images = 1800 new rows. ETA ~7 hours.
+
+Existing 1800 v1 rows are untouched.
+
+### EXP-015 — Tier B: spectral-aware likelihood guidance (2026-05-20)
+
+**Goal.** Replace the uniform-across-frequencies ζ with a per-frequency
+ζ_f that downweights frequencies where the assumed forward operator
+(Gaussian) is below a noise floor. Directly motivated by the
+operator-mismatch finding from EXP-009.
+
+**Commit:** `315ac85` on `feature/publication-improvements`.
+
+**Implementation:**
+
+New module `src/samplers/spectral_weight.py`:
+
+- `noise_floor_weight(H_otf, eps, alpha, normalize_mean=True)`:
+  `W(f) = 1 / (1 + α · relu(eps − |H(f)|))`. For frequencies above
+  the threshold the weight is 1; below, it falls smoothly. Mean-
+  normalized so the effective gradient magnitude stays compatible
+  with the existing ζ tunings.
+- `spectral_residual_l2(residual, W)`: computes
+  `‖IFFT(W · FFT(residual))‖_2`. With `W=None` falls back to spatial
+  `‖residual‖_2` bit-identically (verified to fp32 tolerance).
+
+Sampler refactor: both `PixelDPS.sample()` and `FlowDPSRF.sample()`
+gain `spectral_weight: Optional[torch.Tensor]` kwarg, default `None`.
+
+Methods registered in `scripts/run_robustness.py`: `pixel_dps_spectral`
+and `flowdps_rf_spectral`. The OTF is computed once per run from
+`gaussian_otf(args.assumed_sigma, (256, 256))` and reused for every
+(L, θ, σ_n) cell — the W tensor is constant across the cells of a
+single run.
+
+**Empirical validation:** **deferred.** Smoke attempt at 11:54 OOMed
+because the Tier-A grid is using all available VRAM (3060 12GB / Tier-A
+~5GB / smoke ~7.5GB). Will validate once the Tier-A grid completes.
+
+### EXP-016 — Tier C: Tweedie-corrected likelihood (Π-GDM-style, 2026-05-20)
+
+**Goal.** Replace the point-estimate likelihood `‖y − A(x̂₀)‖_2`
+with the proper posterior-aware Gaussian-convolved likelihood that
+accounts for x̂₀'s covariance under the Tweedie estimator. Cleanest
+mathematical contribution among the three tiers.
+
+**Commit:** `3e33703` on `feature/publication-improvements`.
+
+**Derivation.** For a circulant Gaussian-blur operator A with OTF H,
+the Tweedie clean-image estimate x̂₀ has covariance `r_t · I` where:
+
+- **Diffusion (VP DDPM):** `r_t = (1 − ᾱ_t) / ᾱ_t`.
+- **Rectified flow:** `r_t = (1 − t)²` (RF analog).
+
+The posterior likelihood under this covariance is Gaussian with
+covariance `σ_n² I + r_t · A A^T`, which is diagonal in FFT basis:
+
+> log p(y | x̂₀) ∝ −∑_f |Y(f) − H(f) X̂₀(f)|² / (σ_n² + r_t · |H(f)|²)
+
+So the per-frequency weight is `1 / (σ_n² + r_t · |H(f)|²)`. We apply
+its square root in spectral_residual_l2 so `‖√W · residual_fft‖₂²`
+equals the log-likelihood up to a constant.
+
+**Implementation.**
+
+New module `src/samplers/tweedie_likelihood.py`:
+- `pigdm_weight(H_otf, sigma_n, r_t)` — mean-normalized, with
+  `r_t_cap=1e3` to prevent blow-up near ᾱ_t → 0 (mirrors DDRM).
+- `diffusion_r_t(alpha_bar_t)` and `rf_r_t(t)` helpers.
+
+Sampler refactor: both samplers gain `pigdm_otf` and `pigdm_sigma_n`
+kwargs. When `pigdm_otf is not None`, `r_t` is computed per-step
+(diffusion uses the `alphas_cumprod[t]` already available; RF uses
+the loop's `num_t`), the weight is recomputed, and the existing
+`spectral_residual_l2` does the FFT reweighting.
+
+Methods registered in both `scripts/run_grid.py` and
+`scripts/run_robustness.py`: `pixel_dps_pigdm`, `flowdps_rf_pigdm`.
+They build on the Tier-A v2 ζ defaults (Pixel-DPS scalar ζ=30,
+FlowDPS-on-RF EMA + ramp(200, 0.5)).
+
+**Tests.** 4 new unit tests in `tests/test_sampler_backcompat.py`:
+- `pigdm_weight` shape + positivity
+- uniform when r_t=0 (no correction)
+- `diffusion_r_t` monotone in ᾱ_t
+- `rf_r_t` boundary values
+
+All 15 backcompat tests pass.
+
+**Empirical validation:** **deferred** for the same GPU-contention
+reason as Tier B. Will run smoke + grids once Tier-A completes.
+
 ---
 
 ## Open questions / to-do
