@@ -58,25 +58,39 @@ class FlowDPSRF:
         spectral_weight: Optional[torch.Tensor] = None,
         pigdm_otf: Optional[torch.Tensor] = None,
         pigdm_sigma_n: float = 0.05,
+        integrator: str = "euler",
     ) -> FlowDPSResult:
         """Sample x ~ p(x | y) with FlowDPS-on-RF.
 
         Args:
             y: observed degraded image in [0, 1], shape (B, C, H, W).
             forward_op: differentiable forward operator on [0, 1] images.
-            num_steps: number of Euler steps (NFE budget).
+            num_steps: NFE budget (number of velocity-field evaluations).
+                For `integrator="euler"` this is the step count directly.
+                For `integrator="heun"` each step costs 2 velocity calls,
+                so we run `num_steps // 2` Heun steps — the `nfe` reported
+                stays equal to `num_steps`, keeping the budget comparable.
             zeta: likelihood-gradient guidance scale. Either a scalar
                 (constant ζ across all steps, the original behavior) or
                 a `ZetaSchedule` callable `(step_idx, num_steps) -> float`
                 from `src.samplers.schedules`. Default 1.0 (scalar).
             eps_t: integration start time (avoid t=0 singularity in 1/t terms).
             seed: per-call RNG seed for the initial noise draw.
+            integrator: "euler" (1st-order, original) or "heun" (2nd-order
+                predictor-corrector). Heun applies the 2nd-order correction
+                to the model velocity field; the likelihood-guidance term
+                is computed once per step (at the predictor point) and
+                reused for the corrector — the ODE backbone benefits most
+                from higher-order integration, the guidance is a slowly
+                varying correction.
         """
         from src.samplers.schedules import resolve as _resolve_zeta
         from src.samplers.spectral_weight import spectral_residual_l2
         from src.samplers.tweedie_likelihood import pigdm_weight, rf_r_t
 
         use_pigdm = pigdm_otf is not None
+        if integrator not in ("euler", "heun"):
+            raise ValueError(f"Unknown integrator: {integrator}")
         import time
 
         B, C, H, W = y.shape
@@ -89,58 +103,66 @@ class FlowDPSRF:
         x = torch.randn((B, C, H, W), generator=gen, device=self.device, dtype=torch.float32)
 
         T = 1.0
-        dt = (T - eps_t) / num_steps
+        # Heun spends 2 velocity calls per step; halve the step count so
+        # the NFE budget matches a Euler run with the same `num_steps`.
+        n_steps_eff = num_steps if integrator == "euler" else max(1, num_steps // 2)
+        dt = (T - eps_t) / n_steps_eff
+
+        def _likelihood_grad(x_in, t_scalar, step_idx):
+            """Compute the FlowDPS likelihood-gradient at (x_in, t). Returns
+            (grad, loss, grad_norm)."""
+            x_in = x_in.detach().requires_grad_(True)
+            t_b = torch.full((B,), t_scalar, device=self.device, dtype=x_in.dtype)
+            v_local = self.rf.velocity(x_in, t_b)
+            z1_hat = x_in + (1.0 - t_scalar) * v_local
+            # NOTE: no clamp inside the gradient path — clamping zeros the
+            # gradient for any out-of-range pixel at early t, which kills DPS.
+            z1_hat_pix = (z1_hat + 1.0) / 2.0
+            residual = forward_op(z1_hat_pix) - y
+            if use_pigdm:
+                # Π-GDM: weight shape = 1/sqrt(σ_n² + r_t |H|²), un-normalized.
+                r_t = rf_r_t(t_scalar)
+                W = pigdm_weight(pigdm_otf, pigdm_sigma_n, r_t, normalize_mean=False)
+                loss_local = spectral_residual_l2(residual, W, squared=False)
+            else:
+                loss_local = spectral_residual_l2(residual, spectral_weight)
+            g = torch.autograd.grad(loss_local, x_in, retain_graph=False)[0]
+            return v_local.detach(), g.detach(), float(loss_local.item())
 
         log: list[dict] = []
         if self.device.type == "cuda":
             torch.cuda.synchronize()
         t0_wall = time.time()
 
-        for i in range(num_steps):
-            num_t = (i / num_steps) * (T - eps_t) + eps_t  # scalar in [eps, T - eps]
+        for i in range(n_steps_eff):
+            num_t = (i / n_steps_eff) * (T - eps_t) + eps_t  # in [eps, T - eps]
+            zeta_t = _resolve_zeta(zeta, i, n_steps_eff)
 
-            x = x.detach().requires_grad_(True)
-            t_batch = torch.full((B,), num_t, device=self.device, dtype=x.dtype)
-
-            v = self.rf.velocity(x, t_batch)
-            # Tweedie estimate of the clean data endpoint.
-            z1_hat = x + (1.0 - num_t) * v
-
-            # Likelihood gradient on the [0, 1] forward operator.
-            # NOTE: no clamp inside the gradient path — clamping zeros the
-            # gradient for any out-of-range pixel at early t, which kills DPS.
-            z1_hat_pix = (z1_hat + 1.0) / 2.0
-            y_hat = forward_op(z1_hat_pix)
-            residual = y_hat - y
-            # Tier-B: optional static FFT reweighting via `spectral_weight`.
-            # Tier-C: optional Tweedie-corrected per-step weight via `pigdm_otf`.
-            if use_pigdm:
-                # Π-GDM: weight shape = 1/sqrt(σ_n² + r_t |H|²), un-normalized.
-                # L2-norm (not squared) bounds the gradient magnitude across
-                # the r_t schedule — see pixel_dps.py for full diagnosis.
-                r_t = rf_r_t(num_t)
-                W = pigdm_weight(pigdm_otf, pigdm_sigma_n, r_t, normalize_mean=False)
-                loss = spectral_residual_l2(residual, W, squared=False)
-            else:
-                loss = spectral_residual_l2(residual, spectral_weight)
-            grad = torch.autograd.grad(loss, x, retain_graph=False)[0]
+            v, grad, loss_val = _likelihood_grad(x, num_t, i)
             grad_norm = grad.flatten(1).norm(dim=1).mean().item()
 
-            # FlowDPS update: corrected velocity, Euler step. ζ may be a
-            # schedule callable; resolve to a scalar for this step.
-            zeta_t = _resolve_zeta(zeta, i, num_steps)
             with torch.no_grad():
-                v_eff = v.detach() - zeta_t * grad
-                x = (x.detach() + dt * v_eff).detach()
+                v_eff = v - zeta_t * grad
+                if integrator == "euler":
+                    x = (x.detach() + dt * v_eff).detach()
+                else:
+                    # Heun: predictor, extra velocity eval, corrector. The
+                    # guidance grad is reused (computed once at the start).
+                    x_pred = x.detach() + dt * v_eff
+                    t_next = min(num_t + dt, T - eps_t)
+                    t_b_next = torch.full((B,), t_next, device=self.device, dtype=x.dtype)
+                    v_next = self.rf.velocity(x_pred, t_b_next)
+                    v_avg = 0.5 * (v + v_next)
+                    x = (x.detach() + dt * (v_avg - zeta_t * grad)).detach()
 
             log.append({
                 "step": i,
                 "t": float(num_t),
-                "loss": float(loss.item()),
+                "loss": loss_val,
                 "grad_norm": float(grad_norm),
             })
-            if verbose and (i % max(1, num_steps // 5) == 0):
-                print(f"  [{i+1}/{num_steps}] t={num_t:.3f} loss={loss.item():.4f} |grad|={grad_norm:.4e}")
+            if verbose and (i % max(1, n_steps_eff // 5) == 0):
+                print(f"  [{i+1}/{n_steps_eff}] t={num_t:.3f} loss={loss_val:.4f} |grad|={grad_norm:.4e}")
 
         if self.device.type == "cuda":
             torch.cuda.synchronize()

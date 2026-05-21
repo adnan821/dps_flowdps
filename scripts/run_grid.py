@@ -90,6 +90,28 @@ def _resolve_method_config(method: str, args):
         # was tuned for the non-pigdm path and over-corrects here).
         return ("flowdps_rf_ema", args.zeta_pigdm,
                 {"_pigdm": True, "pigdm_sigma_n": None})
+    if method == "pixel_dps_sched":
+        # Time-varying ζ schedule for Pixel-DPS — the genuine analog of
+        # what made flowdps_rf_v2 win (a schedule, not a scalar). Shape /
+        # zeta0 / alpha are chosen by scripts/tune_pixel_schedule.py on a
+        # held-out validation set and passed via CLI.
+        from src.samplers.schedules import (
+            zeta_power, zeta_ramp, zeta_linear_warmup_then_decay,
+        )
+        if args.sched_kind == "power":
+            sched = zeta_power(args.sched_zeta0, args.sched_alpha)
+        elif args.sched_kind == "ramp":
+            sched = zeta_ramp(args.sched_zeta0, args.sched_alpha)
+        elif args.sched_kind == "warmup":
+            sched = zeta_linear_warmup_then_decay(args.sched_zeta0, 0.1, args.sched_alpha)
+        else:
+            raise ValueError(f"Unknown sched_kind: {args.sched_kind}")
+        return ("pixel_dps", sched, {})
+    if method == "flowdps_rf_heun":
+        # FlowDPS-on-RF v2 config (EMA + ramp(200, 0.5)) with a 2nd-order
+        # Heun integrator. Same guidance as v2 — isolates the integrator.
+        return ("flowdps_rf_ema", zeta_ramp(args.zeta_flowdps_rf_v2, 0.5),
+                {"_integrator": "heun"})
     raise ValueError(f"Unknown method: {method}")
 
 
@@ -130,12 +152,15 @@ def main(args):
         zeta_str = _zeta_stringify(zeta)
         # If this method is Tier-C (pigdm), resolve the per-cell OTF + sigma_n.
         use_pigdm = extra_kwargs.pop("_pigdm", False)
+        integrator = extra_kwargs.pop("_integrator", None)
         sample_kwargs: dict = {}
         if use_pigdm:
             if sb not in otf_cache:
                 otf_cache[sb] = gaussian_otf(sb, (256, 256), device=device)
             sample_kwargs["pigdm_otf"] = otf_cache[sb]
             sample_kwargs["pigdm_sigma_n"] = max(sn, 1e-3)
+        if integrator is not None:
+            sample_kwargs["integrator"] = integrator
         # Build sampler once per method.
         if method not in samplers:
             print(f"\n=== Building sampler: {method} (kind={sampler_kind}) ===")
@@ -240,6 +265,13 @@ if __name__ == "__main__":
     p.add_argument("--zeta_pigdm", type=float, default=100.0,
                    help="Scalar zeta for Tier-C pigdm methods. Picked from 2-img "
                         "sweep on (sb=3.0, sn=0.05, NFE=50): pixel→20.48 dB, RF→21.34 dB.")
+    # pixel_dps_sched: time-varying ζ schedule chosen by tune_pixel_schedule.py.
+    p.add_argument("--sched_kind", default="power", choices=["power", "ramp", "warmup"],
+                   help="ζ-schedule shape for the pixel_dps_sched method.")
+    p.add_argument("--sched_zeta0", type=float, default=40.0,
+                   help="Base ζ for the pixel_dps_sched schedule.")
+    p.add_argument("--sched_alpha", type=float, default=1.0,
+                   help="Exponent for the pixel_dps_sched schedule.")
     p.add_argument("--num_images", type=int, default=50)
     p.add_argument("--test_dir", default="data/celeba_hq_256/test")
     p.add_argument("--csv_path", default="outputs/results/main_grid.csv")

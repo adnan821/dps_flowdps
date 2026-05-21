@@ -30,23 +30,29 @@ LABEL = {
     "pixel_dps_v2": "Pixel-DPS v2 (EMA-ish baseline + ζ=30)",
     "pixel_dps_spectral": "Pixel-DPS + spectral-W",
     "pixel_dps_pigdm": "Pixel-DPS + Π-GDM",
+    "pixel_dps_sched": "Pixel-DPS + ζ-schedule",
     "flowdps_rf": "FlowDPS-on-RF (v1)",
     "flowdps_rf_v2": "FlowDPS v2 (EMA + ramp ζ)",
     "flowdps_rf_spectral": "FlowDPS + spectral-W",
     "flowdps_rf_pigdm": "FlowDPS + Π-GDM",
+    "flowdps_rf_heun": "FlowDPS v2 + Heun",
 }
 COLOR = {
     "pixel_dps":           "#1f77b4",
     "pixel_dps_v2":        "#73c2fb",
     "pixel_dps_spectral":  "#1f77b4",
     "pixel_dps_pigdm":     "#0050a0",
+    "pixel_dps_sched":     "#3a9bdc",
     "flowdps_rf":          "#d62728",
     "flowdps_rf_v2":       "#ff7f7f",
     "flowdps_rf_spectral": "#d62728",
     "flowdps_rf_pigdm":    "#a02020",
+    "flowdps_rf_heun":     "#e8762c",
 }
-PIXEL_FAMILY = ["pixel_dps", "pixel_dps_v2", "pixel_dps_spectral", "pixel_dps_pigdm"]
-FLOW_FAMILY = ["flowdps_rf", "flowdps_rf_v2", "flowdps_rf_spectral", "flowdps_rf_pigdm"]
+PIXEL_FAMILY = ["pixel_dps", "pixel_dps_v2", "pixel_dps_spectral", "pixel_dps_pigdm",
+                "pixel_dps_sched"]
+FLOW_FAMILY = ["flowdps_rf", "flowdps_rf_v2", "flowdps_rf_spectral", "flowdps_rf_pigdm",
+               "flowdps_rf_heun"]
 
 
 def load_diffusion_rows(csv_paths: Iterable[str], nfe_filter: int | None = 100) -> dict:
@@ -116,10 +122,12 @@ def make_table_tex(g: dict, family: list[str], caption: str, label: str, out_tex
         "pixel_dps_v2": "v2",
         "pixel_dps_spectral": "spectral",
         "pixel_dps_pigdm": "Π-GDM",
+        "pixel_dps_sched": "ζ-sched",
         "flowdps_rf": "v1",
         "flowdps_rf_v2": "v2",
         "flowdps_rf_spectral": "spectral",
         "flowdps_rf_pigdm": "Π-GDM",
+        "flowdps_rf_heun": "Heun",
     }
     head = "$\\sigma_b$ & $\\sigma_n$ & " + " & ".join(short_label[m] for m in present_methods)
     lines = [
