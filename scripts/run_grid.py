@@ -76,8 +76,8 @@ def _resolve_method_config(method: str, args):
         # Tier-C: Tweedie-corrected likelihood, per-step weight depending
         # on r_t = (1 - alpha_bar_t) / alpha_bar_t. The actual `pigdm_otf`
         # tensor is computed per condition inside main() because it depends
-        # on sigma_b.
-        return ("pixel_dps", args.zeta_pixel_dps_v2,
+        # on sigma_b. ζ=100 picked from 2-img sweep on (σ_b=3.0, σ_n=0.05).
+        return ("pixel_dps", args.zeta_pigdm,
                 {"_pigdm": True, "pigdm_sigma_n": None})  # sigma_n filled in per-cell
     if method == "flowdps_rf":
         return ("flowdps_rf", args.zeta_flowdps_rf, {})
@@ -86,8 +86,9 @@ def _resolve_method_config(method: str, args):
         # (data side). Won the 2-img validation by ~0.8 dB over EMA+scalar.
         return ("flowdps_rf_ema", zeta_ramp(args.zeta_flowdps_rf_v2, 0.5), {})
     if method == "flowdps_rf_pigdm":
-        # Tier-C on FlowDPS: r_t = (1-t)^2 (RF analog).
-        return ("flowdps_rf_ema", zeta_ramp(args.zeta_flowdps_rf_v2, 0.5),
+        # Tier-C on FlowDPS-RF: scalar ζ=100 from 2-img sweep (the v2 ramp
+        # was tuned for the non-pigdm path and over-corrects here).
+        return ("flowdps_rf_ema", args.zeta_pigdm,
                 {"_pigdm": True, "pigdm_sigma_n": None})
     raise ValueError(f"Unknown method: {method}")
 
@@ -236,6 +237,9 @@ if __name__ == "__main__":
                    help="Re-tuned scalar zeta for pixel_dps_v2 (default 30).")
     p.add_argument("--zeta_flowdps_rf_v2", type=float, default=200.0,
                    help="Base zeta for flowdps_rf_v2's ramp(zeta_0, alpha=0.5) schedule.")
+    p.add_argument("--zeta_pigdm", type=float, default=100.0,
+                   help="Scalar zeta for Tier-C pigdm methods. Picked from 2-img "
+                        "sweep on (sb=3.0, sn=0.05, NFE=50): pixel→20.48 dB, RF→21.34 dB.")
     p.add_argument("--num_images", type=int, default=50)
     p.add_argument("--test_dir", default="data/celeba_hq_256/test")
     p.add_argument("--csv_path", default="outputs/results/main_grid.csv")

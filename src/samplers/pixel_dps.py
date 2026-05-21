@@ -141,9 +141,14 @@ class PixelDPS:
             # Tier-C: optional Tweedie-corrected per-step weight via `pigdm_otf`.
             # Default (both None) preserves the pre-refactor spatial L2.
             if use_pigdm:
+                # Π-GDM: weight shape = 1/sqrt(σ_n² + r_t |H|²), un-normalized
+                # to preserve correct relative scaling across (freq, t).
+                # L2-norm (not squared) keeps the gradient magnitude bounded
+                # via the 1/loss factor — without it, r_t varies 400000x
+                # across the 1000→0 schedule and any fixed ζ explodes.
                 r_t = diffusion_r_t(float(alpha_bar_t.item()))
-                W = pigdm_weight(pigdm_otf, pigdm_sn, r_t)
-                loss = spectral_residual_l2(residual, W)
+                W = pigdm_weight(pigdm_otf, pigdm_sn, r_t, normalize_mean=False)
+                loss = spectral_residual_l2(residual, W, squared=False)
             else:
                 loss = spectral_residual_l2(residual, spectral_weight)
             grad = torch.autograd.grad(loss, x, retain_graph=False)[0]

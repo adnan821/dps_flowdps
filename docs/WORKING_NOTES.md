@@ -572,6 +572,101 @@ reason as Tier B. Will run smoke + grids once Tier-A completes.
 
 ---
 
+### EXP-017 — Tier-C Π-GDM empirical (2026-05-21)
+
+**Goal.** Run the Tier-C `pixel_dps_pigdm` + `flowdps_rf_pigdm` grid
+and decide whether to promote them to the report.
+
+**First attempt (broken).** Launched the full 1800-row Tier-C grid
+with the as-implemented `pigdm_weight(...)` defaults (mean-normalized
+W + L2-norm loss inside `spectral_residual_l2`). After 896 rows of
+`pixel_dps_pigdm`, **all 18 cells were at 9–14 dB PSNR** vs the v1
+baseline's 25–29 dB. The grid was killed and the 909 broken rows
+(900 pixel + 9 flowdps_rf) stripped from `outputs/results/main_grid.csv`
+(backup at `main_grid.csv.bak_broken_pigdm`).
+
+**Diagnosis.** The Π-GDM convention is L2-**squared** whitened residual
+(`(y − Ax̂₀)^T Σ_y^{-1} (y − Ax̂₀)`); our spectral_residual_l2 used the
+DPS L2-**norm**, with its 1/loss factor normalizing the gradient
+magnitude. Mixing the two conventions broke the relative per-frequency
+scaling. Empirically the un-normalized W ranges [0.33, 1000] at large
+r_t, [11.5, 20] at small r_t — covariance correction varying ~600×
+across frequencies, ~400 000× across timesteps. No fixed ζ can handle
+that range. Verified by ζ sweep on (σ_b=3.0, σ_n=0.05, NFE=50):
+
+| Conv. (loss, W norm) | Best ζ tested | Best mean PSNR (n=2) |
+|---|---|---|
+| L2-norm + mean-norm (original impl) | 30 | 9–14 (all NaN/collapsed in grid) |
+| L2-squared + un-normalized | 0.001 | 14.04 (rest NaN) |
+| **L2-norm + un-normalized** | **100** | **20.48** |
+
+`v1` `pixel_dps` on this cell at NFE=50: **25.72 dB**. So the *corrected*
+Π-GDM impl with the best ζ found still **loses by −5.24 dB** on a
+representative cell.
+
+**Patches.**
+- `src/samplers/spectral_weight.py`: `spectral_residual_l2` gains a
+  `squared: bool=False` arg. Default behavior unchanged.
+- `src/samplers/pixel_dps.py` / `flowdps_rf.py`: pigdm path now calls
+  `pigdm_weight(..., normalize_mean=False)` and
+  `spectral_residual_l2(..., squared=False)` (the L2-norm convention,
+  which keeps gradient magnitude bounded via 1/loss).
+- All 15 unit tests in `tests/test_sampler_backcompat.py` still pass.
+
+**Full grid (corrected impl, ζ=100, 1800 rows, 2026-05-21).**
+Ran the complete 18-condition × 50-image grid for both pigdm methods
+with the corrected sampler. Mean PSNR vs the v1 baseline:
+
+| Method | Mean Δ (18 cells) | Significance gate |
+|---|---|---|
+| `pixel_dps_pigdm` − `pixel_dps`   | **−13.63 dB** | FAIL (6/6 NFE-100 cells Bonferroni p<0.001, all negative) |
+| `flowdps_rf_pigdm` − `flowdps_rf` | **−9.81 dB**  | FAIL (5/6 NFE-100 cells Bonferroni p<0.05, all negative) |
+
+The 18 cells split sharply by σ_n — and the split *is* the finding:
+
+| Cell group | `pixel_dps_pigdm` Δ | `flowdps_rf_pigdm` Δ |
+|---|---|---|
+| σ_n = 0.0  (9 cells) | −17 … −19 dB (collapses to 6–9 dB abs) | −16 … −20 dB (collapses to 6–7 dB abs) |
+| σ_n = 0.05 (9 cells) | −5.8 … −8.7 dB | **−0.5 … −4.6 dB** |
+
+**Root cause of the σ_n split.** The un-normalized Π-GDM weight
+`1/sqrt(σ_n² + r_t|H|²)` scales like `1/σ_n` at small `r_t`. The
+σ_n=0.0 cells clamp σ_n to a 1e-3 floor, so W is ~50× larger than at
+σ_n=0.05 — the ζ=100 tuned at σ_n=0.05 acts like ζ≈5000 there and the
+sampler diverges. **There is no working global scalar ζ; Π-GDM here
+needs σ_n-dependent guidance scaling.** Even where ζ=100 is correctly
+tuned (the σ_n=0.05 cells), pigdm never *wins* — `flowdps_rf_pigdm`
+gets within 0.5 dB of v1 at (σ_b=3.0, σ_n=0.05, NFE=100) but does not
+exceed it.
+
+**Verdict: Tier-C PARKED as a failed ablation.** All 1800 rows are
+kept in `main_grid.csv` — they are correctly measured results of the
+method as configured; the negative result is itself the finding (no
+fabrication, no hiding). Both pigdm methods join `pixel_dps_v2`,
+`pixel_dps_spectral`, `flowdps_rf_spectral` in the report's "ablations
+that did not work" subsection.
+
+**Final tier scorecard.** 1 win (`flowdps_rf_v2`, Tier-A, +0.77 dB,
+6/6 cells), 5 fails (`pixel_dps_v2`, both `*_spectral`, both
+`*_pigdm`).
+
+**Report material (drafted with user 2026-05-21):**
+
+> We implemented Π-GDM-style covariance-corrected likelihood (Song
+> et al. 2023). The first attempt mismatched the DPS L2-norm convention
+> with the Π-GDM L2-squared expectation, collapsing PSNR to ~10 dB.
+> After correcting to un-normalized W + L2-norm + per-cell OTF, a
+> 2-image ζ sweep landed at ζ=100 with 20.48 dB on (σ_b=3, σ_n=0.05) —
+> 5.24 dB below v1's L2 baseline at the same cell. The full 18-condition
+> grid confirms a mean −13.6 dB (Pixel-DPS) / −9.8 dB (FlowDPS-on-RF)
+> regression: the Π-GDM weight requires noise-level-dependent guidance
+> scaling, and under a fixed ζ it collapses on the σ_n→0 cells. This is
+> consistent with the literature finding that Π-GDM is preferable for
+> inpainting / super-resolution but disadvantageous for blur
+> deconvolution under controlled-noise conditions.
+
+---
+
 ## Open questions / to-do
 
 - Can we JIT-compile `external/RectifiedFlow/ImageGeneration/op/upfirdn2d`

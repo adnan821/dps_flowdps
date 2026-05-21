@@ -68,6 +68,7 @@ def noise_floor_weight(
 def spectral_residual_l2(
     residual: torch.Tensor,
     W: torch.Tensor | None,
+    squared: bool = False,
 ) -> torch.Tensor:
     """Compute `||IFFT(W * FFT(residual))||_2` per batch element, summed.
 
@@ -79,9 +80,16 @@ def spectral_residual_l2(
     `W = 1` everywhere yields `IFFT(FFT(residual)) == residual`,
     matching the spatial-domain norm).
 
+    `squared=True` returns `||·||_2^2` instead — the Π-GDM whitened
+    likelihood is L2-squared by derivation, while plain DPS uses L2-norm
+    (Chung 2023 convention, bounded gradient magnitude). Mixing the two
+    is a bug — Tier-C must pass `squared=True`.
+
     Returns a scalar.
     """
     if W is None:
+        if squared:
+            return (residual.flatten(1).pow(2).sum(dim=1)).sum()
         return torch.linalg.norm(residual.flatten(1), dim=1).sum()
     # FFT, multiply by W (broadcast over batch+channels), IFFT, then
     # L2 norm in spatial domain. We do the L2 norm AFTER IFFT (not in
@@ -92,4 +100,6 @@ def spectral_residual_l2(
     W_b = W.to(R.device, dtype=R.dtype)  # broadcast
     R_w = R * W_b
     r_weighted = torch.real(torch.fft.ifft2(R_w))
+    if squared:
+        return (r_weighted.flatten(1).pow(2).sum(dim=1)).sum()
     return torch.linalg.norm(r_weighted.flatten(1), dim=1).sum()

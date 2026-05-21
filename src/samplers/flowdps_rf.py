@@ -115,9 +115,12 @@ class FlowDPSRF:
             # Tier-B: optional static FFT reweighting via `spectral_weight`.
             # Tier-C: optional Tweedie-corrected per-step weight via `pigdm_otf`.
             if use_pigdm:
+                # Π-GDM: weight shape = 1/sqrt(σ_n² + r_t |H|²), un-normalized.
+                # L2-norm (not squared) bounds the gradient magnitude across
+                # the r_t schedule — see pixel_dps.py for full diagnosis.
                 r_t = rf_r_t(num_t)
-                W = pigdm_weight(pigdm_otf, pigdm_sigma_n, r_t)
-                loss = spectral_residual_l2(residual, W)
+                W = pigdm_weight(pigdm_otf, pigdm_sigma_n, r_t, normalize_mean=False)
+                loss = spectral_residual_l2(residual, W, squared=False)
             else:
                 loss = spectral_residual_l2(residual, spectral_weight)
             grad = torch.autograd.grad(loss, x, retain_graph=False)[0]
