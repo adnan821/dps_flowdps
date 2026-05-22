@@ -54,7 +54,10 @@ def make_flowdps_rf_sampler(device, use_ema: bool = False):
 # Method registry: method-name → (sampler_factory_kwargs, zeta_value_or_schedule)
 # zeta entries that are callables get their __name__ stringified into the CSV
 # `zeta` column via src.samplers.schedules.stringify so resume stays idempotent.
-from src.samplers.schedules import stringify as _zeta_stringify, zeta_ramp
+from src.samplers.schedules import (
+    stringify as _zeta_stringify,
+    zeta_ramp, zeta_power, zeta_linear_warmup_then_decay,
+)
 
 
 def _resolve_method_config(method: str, args):
@@ -94,10 +97,9 @@ def _resolve_method_config(method: str, args):
         # Time-varying ζ schedule for Pixel-DPS — the genuine analog of
         # what made flowdps_rf_v2 win (a schedule, not a scalar). Shape /
         # zeta0 / alpha are chosen by scripts/tune_pixel_schedule.py on a
-        # held-out validation set and passed via CLI.
-        from src.samplers.schedules import (
-            zeta_power, zeta_ramp, zeta_linear_warmup_then_decay,
-        )
+        # held-out validation set and passed via CLI. (Schedule builders
+        # are imported at module scope — a function-local `from import`
+        # would shadow `zeta_ramp` for the whole function.)
         if args.sched_kind == "power":
             sched = zeta_power(args.sched_zeta0, args.sched_alpha)
         elif args.sched_kind == "ramp":
