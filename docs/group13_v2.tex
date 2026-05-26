@@ -77,8 +77,15 @@ keeps improving. Under operator mismatch, however, FlowDPS-on-RF is
 $\sim$5\,dB for Pixel-DPS), reversing the matched-condition comparison.
 All four methods comfortably beat Wiener; DnCNN$+$PnP-ADMM beats our
 FlowDPS reimplementation in $5/6$ noisy cells while running $\sim$60$\times$
-faster than DPS. The findings give concrete guidance for choosing between
-these methods under known versus uncertain forward operators.
+faster than DPS. We additionally evaluate \emph{eight} publication-improvement
+candidates spanning EMA-aligned weight loading, time-varying $\zeta$
+schedules, spectral-aware likelihood reweighting, $\Pi$-GDM-style
+covariance correction, and a 2nd-order Heun integrator. Only one
+(\texttt{flowdps\_rf\_v2}: EMA load $+$ ramp-$\zeta$) clears a strict
+Bonferroni-corrected significance gate, adding $+0.77$\,dB to FlowDPS-on-RF;
+the remaining seven are documented as failed ablations with diagnoses.
+The findings give concrete guidance for choosing between these methods
+under known versus uncertain forward operators.
 \end{abstract}
 
 % =====================================================================
@@ -153,6 +160,17 @@ The contributions of this work are:
   \item A four-method (Wiener, DnCNN$+$PnP, FlowDPS-on-RF, Pixel-DPS)
     Pareto-frontier characterization across three orders of magnitude
     of per-image compute.
+  \item A rigorous \emph{ablation study} of eight candidate
+    improvements to either sampler (EMA-aligned weight loading,
+    time-varying $\zeta$ schedules, spectral-domain residual
+    reweighting, $\Pi$-GDM-style covariance correction, and a Heun
+    2nd-order integrator), evaluated against a strict
+    Bonferroni-corrected significance gate. We report a single
+    confirmed win ($+0.77$\,dB) together with seven diagnosed
+    failures; the negative results --- including a subtle DPS
+    L2-norm vs.\ $\Pi$-GDM L2-squared convention mismatch and a
+    guidance-frequency vs.\ integration-accuracy trade-off in Heun ---
+    are instructive in their own right.
   \item A reproducible open-source pipeline at
     \url{https://github.com/adnan821/dps_flowdps}, including the 3{,}600
     measured rows, all per-experiment logs, and the full LaTeX source
@@ -326,10 +344,14 @@ reflect this sample size.
 
 \paragraph{Hyperparameter tuning.}
 Guidance scale $\zeta$ tuned on a 2-image held-out subset (EXP-001 for
-Pixel-DPS, EXP-006/007 for FlowDPS-on-RF). Locked values:
-$\zeta = 10$ for Pixel-DPS, $\zeta = 100$ for FlowDPS-on-RF. Both are
-monotonic-best in their respective ranges; values past these begin to
-hurt quality.
+Pixel-DPS, EXP-006/007 for FlowDPS-on-RF). Locked values for the
+\textbf{v1} baselines: $\zeta = 10$ for Pixel-DPS, $\zeta = 100$ for
+FlowDPS-on-RF. Both are monotonic-best in their respective ranges;
+values past these begin to hurt quality. The eight
+publication-improvement variants in \S\ref{sec:ablations} each carry
+their own re-tuned $\zeta$ (or $\zeta$-schedule) chosen on a disjoint
+held-out subset (images 50--54), to avoid leakage into the
+50-image evaluation set used for the significance tests.
 
 \paragraph{Metrics.}
 We report PSNR (dB, on the $[0, 1]$ range), SSIM (a PyTorch-native
@@ -708,6 +730,164 @@ compute. Diffusion priors earn their compute budget on the
 harder cells.
 
 % =====================================================================
+\subsection{Publication-improvement ablations}\label{sec:ablations}
+
+Beyond the v1 baselines reported above, we explored \emph{eight}
+candidate improvements to either sampler grouped into three tiers
+(A/B/C) plus a follow-up round (R2). Each variant defines a new method
+name (e.g.\ \texttt{flowdps\_rf\_v2}) so the original v1 rows in our
+results CSV remain untouched as the ``before'' reference. The promotion
+criterion was strict: a variant passes the gate only if (i) its mean
+PSNR difference over the v1 baseline is \emph{positive} AND
+(ii) Bonferroni-corrected $p < 0.05$ in $\geq 4/6$
+$(\sigma_b, \sigma_n)$ cells, at NFE${=}100$, $n{=}50$ images per cell.
+\textbf{Of the eight candidates only one passed the gate}; the rest
+are documented here as instructive negative results rather than
+discarded. The complete scorecard appears in
+Table~\ref{tab:ablations}.
+
+\begin{table}[h]
+  \centering
+  \caption{Round-1 (Tier A/B/C) and Round-2 publication-improvement
+    candidates against their v1 baseline. ``Wins/6'' counts cells with
+    positive $\Delta$ AND Bonferroni $p<0.05$. Only
+    \texttt{flowdps\_rf\_v2} passes the gate.}
+  \label{tab:ablations}
+  \begin{tabular}{llrrl}
+    \toprule
+    Method & Tier & Mean $\Delta$ (dB) & Wins / 6 & Verdict \\
+    \midrule
+    \texttt{flowdps\_rf\_v2}   & A & $\boldsymbol{+0.77}$ & $\boldsymbol{6/6}$ & \textbf{PASSES} \\
+    \texttt{pixel\_dps\_v2}    & A & $-0.66$ & $0/6$ & fail \\
+    \texttt{pixel\_dps\_spectral}\textsuperscript{*}  & B & $-0.18$ & $0/12$ & fail \\
+    \texttt{flowdps\_rf\_spectral}\textsuperscript{*} & B & $-0.20$ & $0/12$ & fail \\
+    \texttt{pixel\_dps\_pigdm}  & C & $-13.63$ & $0/6$ & fail \\
+    \texttt{flowdps\_rf\_pigdm} & C & $-9.81$ & $0/6$ & fail \\
+    \texttt{pixel\_dps\_sched}  & R2 & $-0.46$ & $2/6$ & fail \\
+    \texttt{flowdps\_rf\_heun}  & R2 & $+0.53$ vs v1 \,/\, $-0.25$ vs v2 & $0/6$ vs v2 & fail (dominated by v2) \\
+    \bottomrule
+  \end{tabular}
+  \\[0.4em]
+  \footnotesize \textsuperscript{*}Spectral methods are evaluated on
+  the 12-cell motion-blur robustness study (their design target),
+  not the matched-Gaussian main grid.
+\end{table}
+
+\paragraph{Tier-A: EMA weights $+$ $\zeta$ schedule (1 win, 1 fail).}
+The Liu~2023 RF checkpoint ships 644 EMA \texttt{shadow\_params} for a
+645-parameter network. The missing parameter is the Gaussian
+Fourier-features projection \texttt{all\_modules.0.W}, registered with
+\texttt{requires\_grad=False} and therefore skipped by
+\texttt{gnobitab}'s EMA tracker. \texttt{flowdps\_rf\_v2} aligns the
+644 trainable params to the shadow\_params \emph{and} separately
+copies the frozen \texttt{all\_modules.0.W} from the raw \texttt{model}
+state-dict (omitting the second step leaves the Fourier projection at
+its random initialization and yields catastrophic 7.76\,dB PSNR). It
+then replaces the scalar $\zeta{=}100$ with a power-law ramp
+$\zeta(i) = 200 \cdot (i/N)^{0.5}$, which puts more guidance toward
+the data side of the trajectory where the FlowDPS-RF v1 sampler
+saturates earliest (Figure~\ref{fig:psnr_vs_nfe}). Mean improvement
+over v1: $\boldsymbol{+0.77}$\,dB PSNR, with Cohen's $d$ ranging
+$1.39$--$3.17$ across the six cells (a very large effect by
+conventional thresholds). The companion attempt \texttt{pixel\_dps\_v2}
+(scalar $\zeta = 30$, the analogous Pixel-DPS tweak) failed in the
+opposite direction: it over-corrects on easy cells
+($-0.93$\,dB at $\sigma_b{=}1.5,\sigma_n{=}0$) and gives marginal
+gains only on noisier cells, netting $-0.66$\,dB on average. A single
+global scalar $\zeta$ cannot satisfy both easy and hard cells in
+Pixel-DPS; this directly motivated the Round-2 \texttt{pixel\_dps\_sched}
+attempt below.
+
+\paragraph{Tier-B: spectral-aware likelihood (2 fails).}
+Under operator mismatch the residual energy in the bands the assumed
+operator cannot probe is dominated by measurement noise, suggesting a
+frequency-dependent weight
+$W(f) = 1/(1 + \alpha \cdot \text{relu}(\epsilon - |H(f)|))$
+that downweights residuals where the assumed (Gaussian) operator's
+spectral magnitude is low. We tested both
+\texttt{pixel\_dps\_spectral} and \texttt{flowdps\_rf\_spectral}
+on the motion-blur robustness study (12 cells $\times$ 50 imgs $=$
+600 reconstructions per method). Both fail (mean $-0.18$\,dB and
+$-0.20$\,dB respectively; 10/12 and 5/12 cells Bonferroni-significant
+but every significant cell is in the negative direction). The failure
+is structural rather than tuning-induced: the true motion-blur
+operator has support in different frequency bands than the assumed
+Gaussian, so suppressing residuals in the latter's null space also
+throws away informative signal that the true operator preserved.
+The noise-floor heuristic was fighting the wrong axis.
+
+\paragraph{Tier-C: Tweedie-corrected ($\Pi$-GDM-style) likelihood (2 fails, with a subtle bug).}
+The proper posterior-aware likelihood under Tweedie's clean-image
+estimate (covariance $r_t \cdot I$ where
+$r_t = (1-\bar\alpha_t)/\bar\alpha_t$ for diffusion or $(1-t)^2$
+for rectified flow) is Gaussian with covariance
+$\sigma_n^2 I + r_t \cdot A A^\top$, diagonal in the FFT basis. Our
+\emph{first} attempt used a mean-normalized inverse-variance weight
+combined with the existing DPS L2-\emph{norm} loss; this collapsed
+PSNR to $\sim$10\,dB across all 18 cells. The diagnosis: $\Pi$-GDM is
+by derivation an L2-\emph{squared} whitened-residual likelihood, and
+mixing the two conventions scrambles the per-frequency gradient
+scaling. After correcting to un-normalized $W$ $+$ L2-norm $+$ per-cell
+OTF (un-normalized $W$ preserves the correct relative scaling across
+frequencies; L2-norm's $1/\text{loss}$ factor bounds gradient
+magnitude across the ${\sim}4 \times 10^5{\times}$ swing of $r_t$
+over the schedule), and tuning $\zeta{=}100$ via a held-out 2-image
+sweep, the corrected implementation still fails the gate
+(\texttt{pixel\_dps\_pigdm}: $-13.6$\,dB; \texttt{flowdps\_rf\_pigdm}:
+$-9.8$\,dB). The 18-cell grid splits sharply by noise level: the
+$\sigma_n{=}0$ cells collapse to 6--9\,dB because $W$ scales like
+$1/\sigma_n$ at small $r_t$ and the $10^{-3}$ noise-floor clamp makes
+the effective $\zeta$ explode, while the $\sigma_n{=}0.05$ cells
+merely lose by $0.5$--$8.7$\,dB. A practical implementation would
+require $\sigma_n$-dependent $\zeta$ scaling, which we leave to
+follow-up work --- and which still does not appear to flip the sign
+even when correctly tuned, suggesting $\Pi$-GDM-style corrections
+benefit inpainting and super-resolution more than Gaussian
+deblurring on this prior.
+
+\paragraph{Round-2: $\zeta$-schedule (Pixel-DPS) and Heun integrator (FlowDPS-RF) (2 fails).}
+Two follow-up attempts inspired by the Tier-A win.
+\texttt{pixel\_dps\_sched} replaces the scalar $\zeta{=}10$ with the
+best-of-eight schedule chosen on \emph{held-out} images 50--54
+(\texttt{ramp(80, 0.5)}), the genuine Pixel-DPS analog of what made
+\texttt{flowdps\_rf\_v2} win. On the full 50-image grid it fails the
+gate (mean $-0.46$\,dB), with a clean cell-level split: it
+\emph{wins} ${+}0.8$\,dB on both $\sigma_n{=}0.05$ cells but
+\emph{loses} on every $\sigma_n{=}0$ cell. The optimal $\zeta$
+scaling for Pixel-DPS apparently depends on measurement noise level,
+not on timestep --- the same diagnosis as Tier-C in a different guise.
+\texttt{flowdps\_rf\_heun} swaps the Euler integrator for a 2nd-order
+Heun predictor-corrector on top of the Tier-A winning v2 config, with
+the NFE budget preserved by halving the step count. The result is
+more honest if subtle: \texttt{flowdps\_rf\_heun} technically passes
+the significance gate against \emph{v1} ($+0.53$\,dB) because it
+inherits most of v2's win, but against its actual base config v2 it
+is a consistent $-0.25$\,dB regression across all six cells
+($p < 10^{-19}$ in each cell). At a fixed NFE budget Heun spends two
+velocity calls per step, so it runs only $N/2$ steps and thus invokes
+the measurement-consistency update only $N/2$ times --- half as often
+as Euler. The integration-accuracy gain does not pay for the loss of
+guidance correction frequency on this problem.
+
+\paragraph{What the failed ablations tell us.}
+Read together, the seven failed attempts share a common pattern: each
+extra mechanism (higher fixed $\zeta$, spectral-domain reweighting,
+$\Pi$-GDM correction, time-varying $\zeta$, higher-order integrator)
+imposes a single global hyperparameter on a problem where the optimal
+setting actually varies along an axis the mechanism does not model
+(cell difficulty, true vs.\ assumed operator support, $\sigma_n$, step
+count). The lone Tier-A win, \texttt{flowdps\_rf\_v2}, succeeds
+precisely because it introduces a \emph{time-varying} schedule (more
+guidance toward the data side) on a sampler whose existing failure
+mode --- saturating early in NFE (\S\ref{sec:results},
+Figure~\ref{fig:psnr_vs_nfe}) --- benefits from increasing late-step
+measurement consistency. None of the candidates beats Pixel-DPS in
+absolute terms; Tier-A narrows the matched-Gaussian PSNR gap from
+$+3.24$\,dB to roughly $+1.4$\,dB (e.g.\ 28.61 vs.\ 27.35 at
+$\sigma_b{=}1.5, \sigma_n{=}0$, NFE${=}100$) but the directional
+finding from \S\ref{sec:results} holds.
+
+% =====================================================================
 \section{Discussion}\label{sec:discussion}
 
 % PORTING NOTE: see REPORT_DRAFT.md Section 6 for the full bullet list
@@ -768,6 +948,19 @@ pixel-space DDPM backbone would isolate exactly how much of our
 20-second-per-image cost is attributable to the autograd backward
 pass, and is a clear direction for follow-up work.
 
+\paragraph{Negative-result yield of the ablation study.}
+The 1-pass-from-8 result of \S\ref{sec:ablations} is itself a finding.
+Most of the candidate improvements --- spectral-domain reweighting,
+$\Pi$-GDM-style covariance correction, higher-order integration ---
+have textbook motivation but do not transfer cleanly to the
+pixel-space CelebA-HQ-256 Gaussian-deblurring setting at the noise
+levels and NFE budgets we test. The common failure mode is a global
+hyperparameter masking a setting that should in fact vary along an
+unmodeled axis (noise level, frequency band, or step count). Each
+failed ablation is preserved as code in the project repository so
+future work can revisit them with the axis-dependent tuning we
+identified as the missing piece.
+
 \paragraph{Limitations.}
 (i)~50 images per cell — error bars are reported as $\pm\sigma$ in the
 supplementary tables. (ii)~Single dataset (CelebA-HQ-256 faces).
@@ -776,10 +969,13 @@ supplementary tables. (ii)~Single dataset (CelebA-HQ-256 faces).
 available time (it collapsed to $\sim$14\,dB even at the easiest cell);
 we report DnCNN$+$PnP-ADMM as the analogous classical-prior reference
 instead. The parked DDRM code is preserved in the repository for future
-investigation. (v)~The Liu~2023 RF checkpoint's EMA weights are not
-loaded due to a shadow-params count mismatch in the released file; we
-use the non-EMA \texttt{model} state-dict, which may contribute
-$\leq 0.5$\,dB to the FlowDPS gap.
+investigation. (v)~All headline numbers for FlowDPS-on-RF in
+\S\ref{sec:results} use the non-EMA \texttt{model} state-dict (matching
+the v1 baseline); \S\ref{sec:ablations}'s \texttt{flowdps\_rf\_v2}
+shows that correctly loading the EMA shadow\_params \emph{and} the
+frozen Fourier-features projection adds $+0.77$\,dB to the
+matched-Gaussian results, narrowing but not closing the
+Pixel-DPS-vs-FlowDPS-RF gap.
 
 \paragraph{Future work.}
 A clean DDRM implementation would close one gap in our baseline coverage.
@@ -801,10 +997,17 @@ mismatch ($-2.5$\,dB drop vs.\ Pixel-DPS's $-5$\,dB drop under severe
 motion-blur measurement mismatch). All four methods comfortably beat a
 Wiener-filter baseline; DnCNN$+$PnP-ADMM sits in the efficient middle of
 the Pareto frontier, beating FlowDPS-on-RF in $5/6$ noisy cells while
-running $\sim$60$\times$ faster than DPS. The findings give concrete
-guidance for choosing between these methods under known versus uncertain
-forward operators: prefer DPS when the operator is calibrated; consider
-flow-based posterior sampling when the operator may be mis-specified.
+running $\sim$60$\times$ faster than DPS. We further evaluated eight
+publication-improvement candidates against a strict Bonferroni-corrected
+gate: only \texttt{flowdps\_rf\_v2} (correctly EMA-loaded weights $+$
+power-law $\zeta$ ramp) passed, adding $+0.77$\,dB to FlowDPS-on-RF;
+the seven failed candidates are documented as diagnosed negative
+results, including a DPS-vs-$\Pi$-GDM L2-norm/squared convention
+mismatch and a guidance-frequency-vs-integration-accuracy trade-off in
+Heun. The findings give concrete guidance for choosing between these
+methods under known versus uncertain forward operators: prefer DPS when
+the operator is calibrated; consider flow-based posterior sampling when
+the operator may be mis-specified.
 
 % =====================================================================
 % natbib author-year mode (forced by neurips_2024.sty) — each \bibitem

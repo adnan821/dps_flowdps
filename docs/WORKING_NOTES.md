@@ -667,6 +667,76 @@ that did not work" subsection.
 
 ---
 
+### EXP-018 — Round-2: ζ-schedule (Pixel-DPS) and Heun (FlowDPS-RF), both PARKED (2026-05-22)
+
+**Hypotheses.** After Tier A/B/C settled at 1 win + 5 fails, two more
+honest experiments motivated by the Tier-A win:
+
+- **`pixel_dps_sched`:** Pixel-DPS with a time-varying ζ schedule —
+  the genuine Pixel-DPS analog of what made `flowdps_rf_v2` win.
+- **`flowdps_rf_heun`:** FlowDPS-RF v2 config + 2nd-order Heun
+  integrator. `integrator="heun"` runs `num_steps//2` predictor-
+  corrector steps so the NFE budget is matched to Euler.
+
+**Pipeline.** Both grids run via `scripts/run_overnight_pipeline.py`
+(orchestrates: validation sweep → schedule pick → grid → smoke → grid
+→ significance + artifacts → write `OVERNIGHT_SUMMARY.md`).
+
+**Pipeline bug + fix.** The orchestrator finished the pixel-sched
+grid but the Heun smoke crashed with `UnboundLocalError`. Cause: a
+`from ... import zeta_ramp` placed inside the `pixel_dps_sched` branch
+of `_resolve_method_config` shadowed the module-level `zeta_ramp`
+binding for the entire function, breaking the later `flowdps_rf_heun`
+branch. Moved all schedule imports to module scope (commit `7e087e9`).
+Re-ran the Heun grid manually after the fix.
+
+**Validation tuning (held-out images 50–54).**
+
+- `pixel_dps_sched`: 8 candidate schedules tested on 3 cells × 5 imgs.
+  Winner: `ramp(80, 0.5)` (overall 26.95 dB; v1 const(10) was 26.27,
+  v2 const(30) was 26.90 on the same val cells).
+- `flowdps_rf_heun`: no separate sweep — reuses the v2 ramp.
+
+**Full-grid verdicts** (NFE=100, n=50 per cell):
+
+| Method | Mean Δ vs v1 | 6/6 cells |
+|---|---|---|
+| `pixel_dps_sched` | **−0.46 dB**, 2/6 positive | **FAILS** |
+| `flowdps_rf_heun` | **+0.53 dB** (technically passes), 6/6 sig | nuanced — see below |
+
+**Why `pixel_dps_sched` fails.** Clean cell-level split: it WINS
++0.8 dB on both σ_n=0.05 cells but LOSES on every σ_n=0.0 cell. Same
+diagnosis as Tier-C: a single global hyperparameter masks a setting
+that should vary with σ_n.
+
+**Why `flowdps_rf_heun` is NOT a win.** `flowdps_rf_heun` = v2 config
+(EMA + ramp ζ) + Heun integrator. The +0.53 dB vs v1 inherits most
+of v2's +0.77 dB. The honest comparison is heun-vs-v2 (its actual
+base):
+
+| Cell (NFE=100) | heun − v2 | p |
+|---|---|---|
+| sb=1.5/sn=0.0  | −0.261 | 3.0e-24 |
+| sb=1.5/sn=0.05 | −0.246 | 7.3e-27 |
+| sb=3.0/sn=0.0  | −0.242 | 3.9e-26 |
+| sb=3.0/sn=0.05 | −0.217 | 3.8e-26 |
+| sb=5.0/sn=0.0  | −0.269 | 6.2e-20 |
+| sb=5.0/sn=0.05 | −0.239 | 5.3e-21 |
+| **mean** | **−0.246 dB** | all p < 1e-19 |
+
+Heun is strictly dominated by v2. The diagnosis: at fixed NFE budget,
+Heun spends 2 velocity calls per step, so it runs only N/2 steps —
+half as many guidance-gradient corrections as Euler. The ODE-accuracy
+gain does not pay for the loss in guidance correction frequency on
+this problem. Promoting heun as a "win" because the gate technically
+passes against v1 (a strictly worse config) would be misleading —
+parked as a 7th failed ablation.
+
+**Final scorecard:** 1 confirmed win (`flowdps_rf_v2`) + 7 documented
+failed ablations. This is the framing in §5.6 of `group13_v2.tex`.
+
+---
+
 ## Open questions / to-do
 
 - Can we JIT-compile `external/RectifiedFlow/ImageGeneration/op/upfirdn2d`
