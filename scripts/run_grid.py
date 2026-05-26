@@ -51,6 +51,21 @@ def make_flowdps_rf_sampler(device, use_ema: bool = False):
     return FlowDPSRF(rf, device=device)
 
 
+def make_particle_dps_sampler(device, num_particles: int = 8):
+    """Build a gradient-free SMC-style sampler on the same DDPM. P particles
+    of x_t are propagated through DDIM with no autograd; each step reweights
+    by measurement likelihood and resamples when ESS drops below P/2."""
+    from diffusers import DDPMPipeline
+    from src.samplers.particle_dps import ParticleDPS
+    pipe = DDPMPipeline.from_pretrained(
+        "google/ddpm-ema-celebahq-256", cache_dir="checkpoints/hf_cache"
+    )
+    return ParticleDPS(
+        pipe.unet, scheduler_config=pipe.scheduler.config,
+        device=device, num_particles=num_particles,
+    )
+
+
 # Method registry: method-name → (sampler_factory_kwargs, zeta_value_or_schedule)
 # zeta entries that are callables get their __name__ stringified into the CSV
 # `zeta` column via src.samplers.schedules.stringify so resume stays idempotent.
@@ -114,6 +129,12 @@ def _resolve_method_config(method: str, args):
         # Heun integrator. Same guidance as v2 — isolates the integrator.
         return ("flowdps_rf_ema", zeta_ramp(args.zeta_flowdps_rf_v2, 0.5),
                 {"_integrator": "heun"})
+    if method == "particle_dps":
+        # Gradient-free SMC-style sampler on the same DDPM as pixel_dps —
+        # P particles of x_t, no autograd, multinomial resample when ESS
+        # drops below P/2. zeta is unused (no gradient term). The CSV
+        # `zeta` column gets the particle count for resume-key uniqueness.
+        return ("particle_dps", f"P={args.num_particles}", {})
     raise ValueError(f"Unknown method: {method}")
 
 
@@ -172,10 +193,14 @@ def main(args):
                 samplers[method] = make_flowdps_rf_sampler(device, use_ema=False)
             elif sampler_kind == "flowdps_rf_ema":
                 samplers[method] = make_flowdps_rf_sampler(device, use_ema=True)
+            elif sampler_kind == "particle_dps":
+                samplers[method] = make_particle_dps_sampler(device, num_particles=args.num_particles)
             else:
                 raise ValueError(f"Unknown sampler kind: {sampler_kind}")
         sampler = samplers[method]
-        is_pixel_dps_family = sampler_kind == "pixel_dps"
+        # Both pixel_dps and particle_dps expose a `sigma_y` kwarg and don't
+        # take an `integrator`; flowdps_rf is the only family without sigma_y.
+        is_pixel_dps_family = sampler_kind in ("pixel_dps", "particle_dps")
 
         for img_idx, x in enumerate(images):
             key = (method, "gaussian", f"{sb}", f"{sn}", f"{nfe}", zeta_str, f"{img_idx}")
@@ -274,6 +299,8 @@ if __name__ == "__main__":
                    help="Base ζ for the pixel_dps_sched schedule.")
     p.add_argument("--sched_alpha", type=float, default=1.0,
                    help="Exponent for the pixel_dps_sched schedule.")
+    p.add_argument("--num_particles", type=int, default=8,
+                   help="Particle count for the gradient-free particle_dps sampler.")
     p.add_argument("--num_images", type=int, default=50)
     p.add_argument("--test_dir", default="data/celeba_hq_256/test")
     p.add_argument("--csv_path", default="outputs/results/main_grid.csv")
