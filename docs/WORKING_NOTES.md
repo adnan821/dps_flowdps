@@ -32,7 +32,7 @@ counting per method) × 50 imgs.
 
 - **2026-05-19 round 1 (proposal-as-written).** FFHQ-256, "shared backbone DDPM
   U-Net", run on a single A100. Implied by `docs/group13.pdf` Section 5 (which
-  contained fabricated results from a previous note — see
+  contained fabricated results from a prior session — see
   `docs/group13.pdf`).
 - **2026-05-19 round 2.** Tried staying on FFHQ + using the real FlowDPS code
   (Kim 2025), which turned out to need SD3 Medium + ≥24 GB VRAM → required
@@ -363,7 +363,7 @@ broken; possible bugs include scale mismatch between `[-1,1]` diffusion
 space and `[0,1]` measurement space at the FFT boundary, or an
 incorrect sign in the deterministic DDIM update with modified x̂₀.
 
-Per the project notes's "if it fails twice, pivot" rule, **parking DDRM** rather
+Per the project's "if it fails twice, pivot" rule, **parking DDRM** rather
 than spending more time debugging. We already have 4 working baselines
 (Pixel-DPS, FlowDPS-on-RF, Wiener, DnCNN+PnP-ADMM) which gives a rich
 comparison for the report. The DDRM rows have been removed from
