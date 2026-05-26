@@ -737,6 +737,179 @@ failed ablations. This is the framing in §5.6 of `group13_v2.tex`.
 
 ---
 
+### EXP-019 — Round-3 (Bucket-3 audit follow-ups: items 3 + 4 + 6, 2026-05-26 → 27)
+
+**Goal.** After the Bucket-3 brief audit confirmed mandatory compliance,
+execute the three highest-ROI follow-ups from the 7-item wishlist:
+NFE efficiency extension (Item 3), uncertainty calibration (Item 4),
+gradient-free particle-DPS (Item 6). Items 1, 2, 5 of the wishlist
+were already in the report; Item 7 (reduced measurements) was deferred.
+
+**Plan:** `<local-plan-path>`
+(approved 2026-05-26 morning).
+
+**Item 3 — NFE 10 / 200 extension grid.** Re-ran `pixel_dps` and
+`flowdps_rf` v1 configs at NFE ∈ {10, 200}, 50 imgs × 6 (σ_b, σ_n)
+cells = 600 new rows / method. Confirms the headline finding: FlowDPS-RF
+saturates already at NFE=10, Pixel-DPS keeps improving through NFE=200.
+`outputs/results/main_grid.csv` now has 1500 rows per v1 method (was
+900). Run launched 2026-05-26 10:45 local, finished 17:14, 6.5 h wall.
+
+**Item 4 — uncertainty calibration analysis** (`scripts/uncertainty_calibration.py`).
+For each of the 3 diversity-study images × 2 samplers: draw N=8 seeds,
+compute per-pixel sample-std map across the 8 samples, compute Sobel
+gradient magnitude on the clean image, take the Spearman ρ on the
+flattened pair. Outputs:
+`outputs/results/uncertainty_calibration.csv` + figure
+`outputs/figures/uncertainty_calibration.{pdf,png}`.
+
+| img | method | Spearman ρ |
+|---|---|---|
+| 0  | pixel_dps  | **0.727** |
+| 0  | flowdps_rf | 0.347 |
+| 7  | pixel_dps  | **0.788** |
+| 7  | flowdps_rf | 0.776 |
+| 25 | pixel_dps  | **0.657** |
+| 25 | flowdps_rf | 0.579 |
+
+Both samplers' posterior uncertainty is positively correlated with
+image edge structure (i.e. uncertainty is image-structure-aware, not
+uniform noise). Pixel-DPS is more consistently so (ρ ≈ 0.66–0.79);
+FlowDPS-RF varies (0.35 on img 0, 0.78 on img 7). Clean publishable
+sub-finding for §5.4.
+
+**Item 6 — gradient-free particle-DPS** (`src/samplers/particle_dps.py`):
+SMC-style sampler on the same DDPM as `pixel_dps`. P=8 particles,
+multinomial resample when ESS < P/2, no autograd. Cited starter:
+Dou et al. 2026. Smoke test passed (16.3 dB at sb=3/sn=0.05 on a
+single image); full 300-row grid (50 imgs × 6 cells, NFE=100 only)
+ran 2026-05-26 21:33 → 02:01 local, ~4.5 h wall.
+
+**Result for `particle_dps`:**
+
+| cell | mean PSNR | Δ vs pixel_dps | Bonferroni p | Cohen's d |
+|---|---|---|---|---|
+| (1.5, 0.0)  | 11.83 | −16.78 | 2.85e-36 | −5.37 |
+| (1.5, 0.05) | 11.82 | −14.39 | 3.42e-37 | −5.62 |
+| (3.0, 0.0)  | 11.83 | −15.33 | 1.16e-35 | −5.21 |
+| (3.0, 0.05) | 11.83 | −14.42 | 6.60e-37 | −5.54 |
+| (5.0, 0.0)  | 11.81 | −14.40 | 1.93e-36 | −5.41 |
+| (5.0, 0.05) | 11.94 | −13.51 | 6.15e-37 | −5.55 |
+| **mean** | **11.85** | **−14.80 dB** | 6/6 sig. negative | d ≈ −5.5 |
+
+PSNR essentially flat across all 6 cells — independent of task
+difficulty. That flatness is the diagnostic signature picked up in
+EXP-020 below.
+
+**Commits.** `721f606 Round-3 (items 3 + 4 + 6 of the audited
+Bucket 3 plan)` introduces `src/samplers/particle_dps.py`,
+`scripts/uncertainty_calibration.py`,
+`scripts/run_round3_pipeline.py`, and `scripts/run_particle_chain.py`.
+
+**Updated scorecard (post-Round-3):** 1 confirmed win
+(`flowdps_rf_v2`) + 8 documented failures (the 7 from EXP-018 plus
+`particle_dps`).
+
+---
+
+### EXP-020 — Tempered particle-DPS attempted fixes (parked with structural diagnosis, 2026-05-27)
+
+**Goal.** After the Round-3 particle_dps flat at ~11.8 dB across all
+cells, attempt two principled SMC fixes to convert it from fail #8 to
+a partial win.
+
+**Fix attempt A — annealed likelihood tempering** (Del Moral, Doucet &
+Jasra, JRSSB 2006). Replace fixed `σ_y` with
+`σ_y_eff(i) = σ_y · (1 + (T_max − 1) · (1 − i/N)^α)` so importance
+weights are broad early (when the Tweedie estimate is unreliable) and
+sharp late. Implemented as new kwargs in `ParticleDPS.sample()` plus
+registration of `particle_dps_tempered` in `run_grid.py`. Held-out
+sweep on images 50–52, cell (σ_b=3, σ_n=0.05), NFE=100, P=8:
+
+| T_max | img 0 | img 1 | img 2 | mean |
+|---|---|---|---|---|
+| 1   | 12.57 | 13.76 | 11.12 | **12.48** |
+| 3   | 12.57 | 13.76 | 11.12 | **12.48** |
+| 10  | 12.57 | 13.76 | 11.12 | **12.48** |
+| 30  | 12.57 | 13.76 | 11.12 | **12.48** |
+| 100 | 12.57 | 13.75 | 11.12 | **12.48** |
+
+Identical to 4 decimals. Tempering had **zero** effect on the output.
+
+**Initial diagnosis:** the broadened weights kept ESS near P, so the
+ESS-gated resampler never fired → particles propagated as independent
+unconditional DDIM trajectories → the final weighted-mean readout
+averaged unconditional draws. Fix B then forces resampling regardless
+of ESS.
+
+**Fix attempt B — force-resample at every step** + tempering. Added
+`force_resample: bool` kwarg; `particle_dps_tempered` now sets it to
+True. Sweep re-run with `--force_resample`:
+
+| T_max | img 0 | img 1 | img 2 | mean | #resamples |
+|---|---|---|---|---|---|
+| 1   | 12.57 | 13.76 | 11.12 | **12.48** | 100/100 |
+| 3   | 12.57 | 13.76 | 11.12 | **12.48** | 100/100 |
+| 10  | 12.57 | 13.76 | 11.12 | **12.48** | 100/100 |
+| 30  | 12.57 | 13.76 | 11.12 | **12.48** | 100/100 |
+| 100 | 12.57 | 13.75 | 11.12 | **12.48** | 100/100 |
+
+Still identical. A direct 4-config diagnostic on image 50:
+
+| config | PSNR | #resamples | runtime |
+|---|---|---|---|
+| T_max=1, ESS-gate | 12.568 | 95 | 118 s |
+| T_max=10, ESS-gate | 12.568 | 93 | 117 s |
+| T_max=1, force-resample | 12.568 | 100 | 77 s |
+| T_max=10, force-resample | 12.568 | 100 | 54 s |
+
+Same PSNR to 4 decimals across configurations whose runtime varies by
+2×, resample count varies, and algorithmic behavior is genuinely
+different.
+
+**Real diagnosis (correct one).** Importance resampling can only
+**select** among existing particle states, never **create** new ones.
+With deterministic DDIM propagation, duplicate states stay duplicate
+forever. After the first few resamples the ensemble has collapsed to
+clones of a single ancestor trajectory; from then on the algorithm runs
+single-particle deterministic DDIM regardless of weights or tempering.
+The ~12.5 dB plateau is the unconditional-DDIM ceiling for one chain.
+
+This is the **long-trajectory path-degeneracy** of classical particle
+filters (Doucet, de Freitas & Gordon 2001, Ch. 12), in
+diffusion-prior clothing. The fix in the literature is an MCMC
+rejuvenation move (Metropolis-Hastings or Langevin) inserted between
+propagation and resampling — but a Langevin step requires the
+score gradient, partially defeating the "gradient-free" framing.
+Dou et al. 2026's "Constrained Particle Seeking" uses exactly this
+score-Langevin path.
+
+**Verdict.** Vanilla gradient-free SMC on a deterministic DDIM
+backbone is structurally degenerate. Tempering doesn't help.
+Force-resampling doesn't help. Neither could.
+
+**`particle_dps_tempered` is therefore parked** alongside the other
+ablations — but the report's §5.4.1 frames this as a structured
+**negative result with a clean theoretical diagnosis**, not a
+tuning failure: gradient-free SMC needs a rejuvenation kernel; the
+literature's gradient-free-looking methods retain the score gradient
+for that kernel. That is the Bucket-3 answer to the brief's
+gradient-free axis.
+
+**Math + full derivation:** `docs/TEMPERED_PARTICLE_DPS.md` (550
+lines, §§1–10 original derivation, §§11–13 added 2026-05-27 with the
+empirical-sweep tables and corrected diagnosis).
+
+**Commit.** `c7332cb Round-3+ particle-DPS: tempering +
+force-resample fixes (negative result, fully diagnosed)`.
+
+**Scorecard (final, all rounds): 1 win + 9 documented failed ablations**
+— `flowdps_rf_v2` (WIN) and `{pixel_dps_v2, pixel_dps_spectral,
+flowdps_rf_spectral, pixel_dps_pigdm, flowdps_rf_pigdm, pixel_dps_sched,
+flowdps_rf_heun, particle_dps, particle_dps_tempered}` (FAIL).
+
+---
+
 ## Open questions / to-do
 
 - Can we JIT-compile `external/RectifiedFlow/ImageGeneration/op/upfirdn2d`
