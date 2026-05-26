@@ -66,6 +66,17 @@ def make_particle_dps_sampler(device, num_particles: int = 8):
     )
 
 
+def make_flowdps_rf_pigdm_pure_sampler(device):
+    """Build the analytical Π-GDM-pure FlowDPS-on-RF sampler.
+    Loads the same EMA-corrected RF weights as flowdps_rf_v2 — for a
+    fair pigdm-vs-v2 comparison the model should be identical (the
+    sampling algorithm is the only knob)."""
+    from src.models.rf_celebahq import load_rf_model
+    from src.samplers.flowdps_rf_pigdm_pure import FlowDPSRFPiGDMPure
+    rf = load_rf_model(device=device, use_non_ema=True)
+    return FlowDPSRFPiGDMPure(rf, device=device, sigma_n_floor=0.01)
+
+
 # Method registry: method-name → (sampler_factory_kwargs, zeta_value_or_schedule)
 # zeta entries that are callables get their __name__ stringified into the CSV
 # `zeta` column via src.samplers.schedules.stringify so resume stays idempotent.
@@ -135,6 +146,14 @@ def _resolve_method_config(method: str, args):
         # drops below P/2. zeta is unused (no gradient term). The CSV
         # `zeta` column gets the particle count for resume-key uniqueness.
         return ("particle_dps", f"P={args.num_particles}", {})
+    if method == "flowdps_rf_pigdm_pure":
+        # Fix #1: analytical Π-GDM (Song 2023) on RF. No free ζ — the
+        # gradient magnitude is derived from the Tweedie covariance
+        # r_t = (1-t)². σ_y floored at 0.01 to keep the σ_n=0 cells
+        # finite. The H_otf and sigma_y are injected per-cell in main()
+        # (same pattern as the old `*_pigdm` Tier-C path).
+        return ("flowdps_rf_pigdm_pure", "eta=1.0",
+                {"_pigdm_pure": True, "pigdm_sigma_n": None})
     if method == "particle_dps_tempered":
         # Fix #9 (revised after held-out sweep): SMC with annealed
         # likelihood AND force-resampling at every step. Tempering alone
@@ -189,6 +208,7 @@ def main(args):
         zeta_str = _zeta_stringify(zeta)
         # If this method is Tier-C (pigdm), resolve the per-cell OTF + sigma_n.
         use_pigdm = extra_kwargs.pop("_pigdm", False)
+        use_pigdm_pure = extra_kwargs.pop("_pigdm_pure", False)
         integrator = extra_kwargs.pop("_integrator", None)
         tempering_max = extra_kwargs.pop("_tempering_max", None)
         tempering_alpha = extra_kwargs.pop("_tempering_alpha", None)
@@ -199,6 +219,13 @@ def main(args):
                 otf_cache[sb] = gaussian_otf(sb, (256, 256), device=device)
             sample_kwargs["pigdm_otf"] = otf_cache[sb]
             sample_kwargs["pigdm_sigma_n"] = max(sn, 1e-3)
+        if use_pigdm_pure:
+            # The pigdm_pure samplers take H_otf + sigma_n as positional/
+            # named args (not pigdm_otf). Build the OTF once per σ_b.
+            if sb not in otf_cache:
+                otf_cache[sb] = gaussian_otf(sb, (256, 256), device=device)
+            sample_kwargs["H_otf"] = otf_cache[sb]
+            sample_kwargs["sigma_n"] = sn   # the sampler floors internally at 0.01
         if integrator is not None:
             sample_kwargs["integrator"] = integrator
         if tempering_max is not None:
@@ -217,11 +244,15 @@ def main(args):
                 samplers[method] = make_flowdps_rf_sampler(device, use_ema=True)
             elif sampler_kind == "particle_dps":
                 samplers[method] = make_particle_dps_sampler(device, num_particles=args.num_particles)
+            elif sampler_kind == "flowdps_rf_pigdm_pure":
+                samplers[method] = make_flowdps_rf_pigdm_pure_sampler(device)
             else:
                 raise ValueError(f"Unknown sampler kind: {sampler_kind}")
         sampler = samplers[method]
         # Both pixel_dps and particle_dps expose a `sigma_y` kwarg and don't
-        # take an `integrator`; flowdps_rf is the only family without sigma_y.
+        # take an `integrator`; flowdps_rf families don't take sigma_y at the
+        # public sample() entry. pigdm_pure samplers take sigma_n explicitly
+        # via sample_kwargs (set above) so they don't need the sigma_y kwarg.
         is_pixel_dps_family = sampler_kind in ("pixel_dps", "particle_dps")
 
         for img_idx, x in enumerate(images):

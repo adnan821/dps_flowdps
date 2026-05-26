@@ -38,6 +38,7 @@ LABEL = {
     "flowdps_rf_spectral": "FlowDPS + spectral-W",
     "flowdps_rf_pigdm": "FlowDPS + Π-GDM",
     "flowdps_rf_heun": "FlowDPS v2 + Heun",
+    "flowdps_rf_pigdm_pure": "FlowDPS + Π-GDM (analytical, no ζ)",
 }
 COLOR = {
     "pixel_dps":           "#1f77b4",
@@ -52,11 +53,12 @@ COLOR = {
     "flowdps_rf_spectral": "#d62728",
     "flowdps_rf_pigdm":    "#a02020",
     "flowdps_rf_heun":     "#e8762c",
+    "flowdps_rf_pigdm_pure":"#8a5400",
 }
 PIXEL_FAMILY = ["pixel_dps", "pixel_dps_v2", "pixel_dps_spectral", "pixel_dps_pigdm",
                 "pixel_dps_sched", "particle_dps", "particle_dps_tempered"]
 FLOW_FAMILY = ["flowdps_rf", "flowdps_rf_v2", "flowdps_rf_spectral", "flowdps_rf_pigdm",
-               "flowdps_rf_heun"]
+               "flowdps_rf_heun", "flowdps_rf_pigdm_pure"]
 
 
 def load_diffusion_rows(csv_paths: Iterable[str], nfe_filter: int | None = 100) -> dict:
@@ -134,6 +136,7 @@ def make_table_tex(g: dict, family: list[str], caption: str, label: str, out_tex
         "flowdps_rf_spectral": "spectral",
         "flowdps_rf_pigdm": "Π-GDM",
         "flowdps_rf_heun": "Heun",
+        "flowdps_rf_pigdm_pure": "Π-GDM-pure",
     }
     head = "$\\sigma_b$ & $\\sigma_n$ & " + " & ".join(short_label[m] for m in present_methods)
     lines = [

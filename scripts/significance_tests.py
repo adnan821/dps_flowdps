@@ -52,7 +52,7 @@ def main(args):
         "pixel_dps", "pixel_dps_v2", "pixel_dps_spectral", "pixel_dps_pigdm",
         "pixel_dps_sched", "particle_dps", "particle_dps_tempered",
         "flowdps_rf", "flowdps_rf_v2", "flowdps_rf_spectral", "flowdps_rf_pigdm",
-        "flowdps_rf_heun",
+        "flowdps_rf_heun", "flowdps_rf_pigdm_pure",
     }
     classical = {"wiener", "dncnn_pnp_admm"}
     methods = diffusion_family | classical
@@ -115,6 +115,9 @@ def main(args):
         # AND against particle_dps for the tempering-effect ablation.
         ("particle_dps_tempered",   100,   "pixel_dps",      100),
         ("particle_dps_tempered",   100,   "particle_dps",   100),
+        # Fix #1: analytical Π-GDM (pure form, no free ζ) on FlowDPS-RF
+        ("flowdps_rf_pigdm_pure",   100,   "flowdps_rf",     100),
+        ("flowdps_rf_pigdm_pure",   100,   "flowdps_rf_v2",  100),
     ]
 
     sbs = [1.5, 3.0, 5.0]
@@ -206,6 +209,8 @@ def main(args):
         "particle_dps - pixel_dps",
         "particle_dps_tempered - pixel_dps",
         "particle_dps_tempered - particle_dps",
+        "flowdps_rf_pigdm_pure - flowdps_rf",
+        "flowdps_rf_pigdm_pure - flowdps_rf_v2",
     )
     for prefix in summary_prefixes:
         rows = [r for r in out_rows if r["comparison"].startswith(prefix + " @")]
