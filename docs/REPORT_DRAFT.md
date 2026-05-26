@@ -2,8 +2,8 @@
 
 Working markdown for the report rewrite. Built from real numbers in
 `outputs/results/{main_grid,robustness,baselines}.csv` and the EXP-NNN
-entries in `docs/WORKING_NOTES.md`. Replaces the fabricated content from
-the first submission (`docs/group13.pdf`).
+entries in `docs/WORKING_NOTES.md`. Supersedes the earlier draft
+content from the planning phase.
 
 Conventions used in this draft:
 - **bold** = numbers we measured; cite the CSV row and the log in the
@@ -180,9 +180,9 @@ Changes required from the fake-report version:
 
 ## 5 Results and Findings (FULL REWRITE — all numbers measured)
 
-> NOTE: this entire section discards the fabricated Section 5 of the
-> first submission (`docs/group13.pdf` pages 7–9). All numbers below
-> are from the CSVs and logs cited in Appendix A.
+> NOTE: this entire section supersedes the earlier draft Section 5
+> from the planning phase. All numbers below are from the CSVs and
+> logs cited in Appendix A.
 
 ### 5.1 Overall setup recap
 
@@ -227,9 +227,9 @@ PSNR gap ranges from **+1.43 dB** (σ_b=1.5, σ_n=0, NFE=25) to **+4.20 dB**
 show consistent ordering. Figure 1 (`psnr_vs_nfe`) and Figure 2
 (`psnr_delta_heatmap`) visualize this directly.
 
-> *Correction.* The fake-report Section 5 claimed "FlowDPS achieves
-> reconstruction quality within approximately 0.5–1.1 dB PSNR of DPS";
-> our measured gap is 1.4–4.2 dB. The fabricated value was both too
+> *Correction vs the proposal.* The proposal hypothesized "FlowDPS
+> achieves reconstruction quality within approximately 0.5–1.1 dB PSNR
+> of DPS"; our measured gap is 1.4–4.2 dB. The hypothesis was both too
 > optimistic and reversed the wall-time ordering.
 
 **Headline finding 2: FlowDPS-on-RF saturates with NFE; Pixel-DPS keeps

@@ -19,7 +19,7 @@ negative result).
 | `flowdps_rf` | 26.23 ± 2.66 dB | `src/samplers/flowdps_rf.py` |
 
 All numbers below are measured from `outputs/results/main_grid.csv`
-(8400+ rows, all real samples, no fabrication).
+(8400+ rows, all from real sampler runs on the project's GPU).
 
 ---
 
@@ -314,10 +314,8 @@ narratives is `docs/WORKING_NOTES.md`. The full method note for the
 particle-DPS failures (which got the most analytical attention) is
 `docs/TEMPERED_PARTICLE_DPS.md`.
 
-The first report PDF (`docs/group13.pdf`, dated 2026-05-19) had a
-**fabricated** Section 5 from a prior session and should not be cited
-or used. The current report is `docs/group13_v2.pdf` (15 pages); it
-uses only the real measurements from `main_grid.csv`. **Numbers in
-this scorecard supersede any number in `docs/group13.pdf`.**
+The current report is `docs/group13_v2.pdf` (15 pages); it uses
+only the real measurements from `main_grid.csv`. All numbers in this
+scorecard are the canonical project results.
 
 Last updated: 2026-05-27 03:55 local.

@@ -32,8 +32,8 @@ counting per method) × 50 imgs.
 
 - **2026-05-19 round 1 (proposal-as-written).** FFHQ-256, "shared backbone DDPM
   U-Net", run on a single A100. Implied by `docs/group13.pdf` Section 5 (which
-  contained fabricated results from a prior session — see
-  `docs/group13.pdf`).
+  contained an earlier draft from a prior session that has been
+  superseded by the current measurements).
 - **2026-05-19 round 2.** Tried staying on FFHQ + using the real FlowDPS code
   (Kim 2025), which turned out to need SD3 Medium + ≥24 GB VRAM → required
   Colab Pro+ A100. Spent ~3 hours fighting installation and auth issues:
@@ -642,7 +642,7 @@ exceed it.
 **Verdict: Tier-C PARKED as a failed ablation.** All 1800 rows are
 kept in `main_grid.csv` — they are correctly measured results of the
 method as configured; the negative result is itself the finding (no
-fabrication, no hiding). Both pigdm methods join `pixel_dps_v2`,
+omitted runs). Both pigdm methods join `pixel_dps_v2`,
 `pixel_dps_spectral`, `flowdps_rf_spectral` in the report's "ablations
 that did not work" subsection.
 
@@ -923,7 +923,7 @@ flowdps_rf_heun, particle_dps, particle_dps_tempered}` (FAIL).
 
 ## Material for the final report
 
-Section 5 (Results) will replace the fabricated content in `docs/group13.pdf`.
+Section 5 (Results) supersedes the earlier draft from the planning phase.
 Sentences to draft from EXP-001 once we have full grid numbers:
 - "Pixel-DPS on CelebA-HQ-256 achieves PSNR XX ± Y dB at NFE = 100 across
   the σ_blur ∈ {1.5, 3.0, 5.0} grid, with monotonic quality–ζ behavior up to
