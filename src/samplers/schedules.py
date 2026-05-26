@@ -86,9 +86,15 @@ def resolve(zeta: float | ZetaSchedule, i: int, N: int) -> float:
     return float(zeta)
 
 
-def stringify(zeta: float | ZetaSchedule) -> str:
+def stringify(zeta) -> str:
     """Stringify a ζ value or schedule so we can put it in a CSV cell
-    without writing a callable's raw repr. Idempotent for resume."""
+    without writing a callable's raw repr. Idempotent for resume.
+
+    Accepts: float / int (numeric), callable (schedule), or str (already-
+    stringified label — e.g. `particle_dps` passes `"P=8"` as its zeta
+    column to make the resume key unique per particle count)."""
+    if isinstance(zeta, str):
+        return zeta
     if callable(zeta):
         name = getattr(zeta, "__name__", None) or repr(zeta)
         return name

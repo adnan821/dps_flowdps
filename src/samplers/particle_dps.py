@@ -92,6 +92,9 @@ class ParticleDPS:
         seed: Optional[int] = 0,
         verbose: bool = False,
         num_particles: Optional[int] = None,
+        tempering_max: float = 1.0,
+        tempering_alpha: float = 2.0,
+        force_resample: bool = False,
         # Kept for run_grid.py interface symmetry — accepted and ignored:
         zeta: float = 0.0,
         spectral_weight: Optional[torch.Tensor] = None,
@@ -113,6 +116,32 @@ class ParticleDPS:
             sigma_y: assumed measurement-noise std in the likelihood
                 `‖y - A(x̂_0)‖² / (2 σ_y²)`.
             num_particles: optionally override the constructor default.
+            tempering_max: SMC annealed-likelihood maximum temperature
+                factor. The effective likelihood variance at step `i` is
+                `σ_y_eff(i) = σ_y · (1 + (tempering_max − 1) · (1 − i/N)^α)`.
+                With `tempering_max=1.0` (default) the schedule collapses
+                to the un-tempered case (matches Round-3 `particle_dps`).
+                With `tempering_max>1` the early steps see a broader
+                likelihood, preventing the weight-collapse failure mode
+                we observed at P=8: peaky weights (`σ_y=0.05`) cause all
+                mass to collapse onto one particle on the first
+                resample, after which the trajectory is essentially
+                unguided DDIM. Tempering broadens the early posterior so
+                multiple particles survive resampling.
+            tempering_alpha: schedule exponent; higher = faster cool-down.
+            force_resample: if True, resample particles at EVERY step
+                regardless of ESS. Combined with `tempering_max > 1`,
+                this fixes the failure mode where the ESS gate never
+                fires (broad weights keep ESS near P) and particle
+                states therefore never get biased toward the likelihood —
+                the final weighted-mean readout would be an average of
+                independent prior draws. With force-resample on, every
+                step biases the particle ensemble toward
+                higher-likelihood regions, and the tempering keeps
+                offspring diverse (peaky weights without tempering
+                would clone one particle, defeating SMC). Default
+                False preserves backward compatibility with the
+                Round-3 `particle_dps` baseline.
             zeta/spectral_weight/pigdm_*: accepted for grid-runner
                 compatibility; ignored (this sampler has no guidance
                 gradient).
@@ -156,7 +185,13 @@ class ParticleDPS:
             y_hat = forward_op(x_hat_0_pix)
             # Sum-of-squares per particle.
             sq = (y_hat - y_rep).flatten(1).pow(2).sum(dim=1)  # (P,)
-            log_lik = -0.5 * sq / (sigma_y ** 2 + 1e-12)
+            # SMC tempering: σ_y_eff = σ_y · (1 + (T_max−1)·(1−i/N)^α).
+            # At i=0: σ_y_eff = σ_y · T_max (broad weights).
+            # At i=N-1: σ_y_eff ≈ σ_y (sharp, matches un-tempered).
+            # T_max=1 → un-tempered (backward-compatible with Round-3).
+            anneal = 1.0 + (tempering_max - 1.0) * ((1.0 - i / max(1, num_steps)) ** tempering_alpha)
+            sigma_y_eff = sigma_y * anneal
+            log_lik = -0.5 * sq / (sigma_y_eff ** 2 + 1e-12)
 
             # Bayesian update: posterior log-weight ∝ prior log-weight + log-lik.
             log_w = log_w + log_lik
@@ -167,8 +202,12 @@ class ParticleDPS:
             ess_frac = ess.item() / P
 
             resampled = False
-            if ess_frac < self.ess_threshold:
+            if force_resample or ess_frac < self.ess_threshold:
                 # Multinomial resample with replacement; reset log-weights.
+                # `force_resample=True` ignores the ESS gate — used by the
+                # tempered SMC variant (`particle_dps_tempered`) where
+                # tempering keeps ESS high and we WANT every step to
+                # bias the particle states toward the likelihood.
                 idx = torch.multinomial(w, P, replacement=True, generator=gen)
                 x = x[idx]
                 log_w = torch.zeros(P, device=self.device, dtype=torch.float32)
@@ -185,10 +224,12 @@ class ParticleDPS:
                 "ess_frac": float(ess_frac),
                 "resampled": bool(resampled),
                 "log_lik_mean": float(log_lik.mean().item()),
+                "sigma_y_eff": float(sigma_y_eff),
             })
             if verbose and (i % max(1, num_steps // 5) == 0):
                 print(f"  [{i+1}/{num_steps}] t={int(t)} ess={ess_frac:.3f} "
-                      f"resampled={resampled} log_lik_mean={log_lik.mean():.3f}")
+                      f"resampled={resampled} σ_eff={sigma_y_eff:.3f} "
+                      f"log_lik_mean={log_lik.mean():.3f}")
 
         if self.device.type == "cuda":
             torch.cuda.synchronize()

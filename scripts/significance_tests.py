@@ -50,7 +50,7 @@ def main(args):
     # Load both CSVs. Method allowlist auto-extended for tier A/B/C variants.
     diffusion_family = {
         "pixel_dps", "pixel_dps_v2", "pixel_dps_spectral", "pixel_dps_pigdm",
-        "pixel_dps_sched", "particle_dps",
+        "pixel_dps_sched", "particle_dps", "particle_dps_tempered",
         "flowdps_rf", "flowdps_rf_v2", "flowdps_rf_spectral", "flowdps_rf_pigdm",
         "flowdps_rf_heun",
     }
@@ -110,6 +110,11 @@ def main(args):
         ("flowdps_rf_heun",     100,   "flowdps_rf",       100),
         # Round 3: gradient-free particle sampler vs gradient-based DPS
         ("particle_dps",        100,   "pixel_dps",        100),
+        # Round 4: tempered SMC fix for the particle-collapse failure.
+        # Compared against pixel_dps (the v1 baseline) for gate purposes,
+        # AND against particle_dps for the tempering-effect ablation.
+        ("particle_dps_tempered",   100,   "pixel_dps",      100),
+        ("particle_dps_tempered",   100,   "particle_dps",   100),
     ]
 
     sbs = [1.5, 3.0, 5.0]
@@ -199,6 +204,8 @@ def main(args):
         "pixel_dps_sched - pixel_dps",
         "flowdps_rf_heun - flowdps_rf",
         "particle_dps - pixel_dps",
+        "particle_dps_tempered - pixel_dps",
+        "particle_dps_tempered - particle_dps",
     )
     for prefix in summary_prefixes:
         rows = [r for r in out_rows if r["comparison"].startswith(prefix + " @")]

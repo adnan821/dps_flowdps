@@ -135,6 +135,20 @@ def _resolve_method_config(method: str, args):
         # drops below P/2. zeta is unused (no gradient term). The CSV
         # `zeta` column gets the particle count for resume-key uniqueness.
         return ("particle_dps", f"P={args.num_particles}", {})
+    if method == "particle_dps_tempered":
+        # Fix #9 (revised after held-out sweep): SMC with annealed
+        # likelihood AND force-resampling at every step. Tempering alone
+        # was insufficient because broad weights kept ESS high → the
+        # ESS-gated resampler never fired → particles drifted as
+        # independent prior samples and the final weighted-mean readout
+        # averaged unconditional draws. Forcing resample at every step,
+        # paired with tempering for diverse offspring, biases the
+        # particle ensemble toward the posterior every step.
+        zeta_str = f"P={args.num_particles}/T={args.tempering_max}/force"
+        return ("particle_dps", zeta_str,
+                {"_tempering_max": args.tempering_max,
+                 "_tempering_alpha": args.tempering_alpha,
+                 "_force_resample": True})
     raise ValueError(f"Unknown method: {method}")
 
 
@@ -176,6 +190,9 @@ def main(args):
         # If this method is Tier-C (pigdm), resolve the per-cell OTF + sigma_n.
         use_pigdm = extra_kwargs.pop("_pigdm", False)
         integrator = extra_kwargs.pop("_integrator", None)
+        tempering_max = extra_kwargs.pop("_tempering_max", None)
+        tempering_alpha = extra_kwargs.pop("_tempering_alpha", None)
+        force_resample = extra_kwargs.pop("_force_resample", None)
         sample_kwargs: dict = {}
         if use_pigdm:
             if sb not in otf_cache:
@@ -184,6 +201,11 @@ def main(args):
             sample_kwargs["pigdm_sigma_n"] = max(sn, 1e-3)
         if integrator is not None:
             sample_kwargs["integrator"] = integrator
+        if tempering_max is not None:
+            sample_kwargs["tempering_max"] = tempering_max
+            sample_kwargs["tempering_alpha"] = tempering_alpha
+        if force_resample is not None:
+            sample_kwargs["force_resample"] = force_resample
         # Build sampler once per method.
         if method not in samplers:
             print(f"\n=== Building sampler: {method} (kind={sampler_kind}) ===")
@@ -301,6 +323,11 @@ if __name__ == "__main__":
                    help="Exponent for the pixel_dps_sched schedule.")
     p.add_argument("--num_particles", type=int, default=8,
                    help="Particle count for the gradient-free particle_dps sampler.")
+    p.add_argument("--tempering_max", type=float, default=10.0,
+                   help="SMC tempering: σ_y_eff starts at σ_y·T_max at step 0 and "
+                        "decays to σ_y at the final step. T_max=1 disables tempering.")
+    p.add_argument("--tempering_alpha", type=float, default=2.0,
+                   help="Exponent of the tempering schedule (1=linear, 2=quadratic).")
     p.add_argument("--num_images", type=int, default=50)
     p.add_argument("--test_dir", default="data/celeba_hq_256/test")
     p.add_argument("--csv_path", default="outputs/results/main_grid.csv")
