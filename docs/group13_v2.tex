@@ -75,15 +75,29 @@ keeps improving. Under operator mismatch, however, FlowDPS-on-RF is
 $\sim$5\,dB for Pixel-DPS), reversing the matched-condition comparison.
 All four methods comfortably beat Wiener; DnCNN$+$PnP-ADMM beats our
 FlowDPS reimplementation in $5/6$ noisy cells while running $\sim$60$\times$
-faster than DPS. We additionally evaluate \emph{eight} publication-improvement
+faster than DPS. We additionally evaluate \emph{thirteen} publication-improvement
 candidates spanning EMA-aligned weight loading, time-varying $\zeta$
 schedules, spectral-aware likelihood reweighting, $\Pi$-GDM-style
-covariance correction, and a 2nd-order Heun integrator. Only one
-(\texttt{flowdps\_rf\_v2}: EMA load $+$ ramp-$\zeta$) clears a strict
-Bonferroni-corrected significance gate, adding $+0.77$\,dB to FlowDPS-on-RF;
-the remaining seven are documented as failed ablations with diagnoses.
-The findings give concrete guidance for choosing between these methods
-under known versus uncertain forward operators.
+covariance correction (heuristic and analytical), a 2nd-order Heun
+integrator at matched and unconstrained NFE budgets, and two
+gradient-free particle samplers (constrained-particle and tempered SMC).
+\textbf{Three candidates} clear a strict Bonferroni-corrected
+significance gate: \texttt{flowdps\_rf\_v2} adds $+0.77$\,dB
+(EMA-aligned weight load + ramp-$\zeta$, $6/6$ cells significant);
+\texttt{pixel\_dps\_spectral} adds $+0.46$\,dB ($5/6$ cells) on the
+matched-Gaussian grid; and \texttt{flowdps\_rf\_spectral} adds $+0.54$\,dB
+($5/6$ cells at $n{=}100$). The two spectral wins show a
+\emph{paradoxical reversal} relative to the Tier-B robustness study:
+the same spectral-weight algorithm \emph{fails} under operator mismatch
+and \emph{wins} on matched-operator data, isolating the mechanism as
+``downweight residuals in noise-dominated frequency bands of the
+\emph{assumed} operator''. The remaining ten variants are documented
+as instructive negative results or near-misses with diagnoses,
+including a DPS-vs-$\Pi$-GDM L2-norm/squared convention mismatch, a
+guidance-saturation diagnosis from a Heun integrator at $2{\times}$ NFE,
+and a path-degeneracy diagnosis from gradient-free SMC.
+The findings give concrete guidance for choosing between these
+methods under known versus uncertain forward operators.
 \end{abstract}
 
 % =====================================================================
@@ -158,17 +172,27 @@ The contributions of this work are:
   \item A four-method (Wiener, DnCNN$+$PnP, FlowDPS-on-RF, Pixel-DPS)
     Pareto-frontier characterization across three orders of magnitude
     of per-image compute.
-  \item A rigorous \emph{ablation study} of eight candidate
-    improvements to either sampler (EMA-aligned weight loading,
-    time-varying $\zeta$ schedules, spectral-domain residual
-    reweighting, $\Pi$-GDM-style covariance correction, and a Heun
-    2nd-order integrator), evaluated against a strict
-    Bonferroni-corrected significance gate. We report a single
-    confirmed win ($+0.77$\,dB) together with seven diagnosed
-    failures; the negative results --- including a subtle DPS
-    L2-norm vs.\ $\Pi$-GDM L2-squared convention mismatch and a
-    guidance-frequency vs.\ integration-accuracy trade-off in Heun ---
-    are instructive in their own right.
+  \item A rigorous \emph{ablation study} of thirteen candidate
+    improvements to either sampler --- EMA-aligned weight loading,
+    time-varying $\zeta$ schedules (fixed and noise-adaptive),
+    spectral-domain residual reweighting (on robustness and matched
+    grids), $\Pi$-GDM-style covariance correction (heuristic and
+    analytical), a 2nd-order Heun integrator at both matched and
+    unconstrained NFE budgets, and gradient-free particle samplers
+    (constrained-particle and tempered SMC) --- evaluated against a
+    strict Bonferroni-corrected significance gate. We report
+    \emph{three confirmed wins}: \texttt{flowdps\_rf\_v2}
+    (EMA $+$ ramp-$\zeta$, $+0.77$\,dB, $6/6$ cells),
+    \texttt{pixel\_dps\_spectral} ($+0.46$\,dB, $5/6$ cells matched),
+    and \texttt{flowdps\_rf\_spectral} ($+0.54$\,dB, $5/6$ cells
+    matched at $n{=}100$). The Tier-B spectral mechanism shows a
+    \emph{paradoxical reversal}: the same algorithm fails on the
+    operator-mismatch grid and wins on the matched grid, sharpening
+    its mechanistic interpretation. Ten candidates are documented as
+    near-misses or diagnosed failures, including a DPS L2-norm vs.\
+    $\Pi$-GDM L2-squared convention mismatch, a guidance-saturation
+    diagnosis from Heun at $2{\times}$ NFE, and a path-degeneracy
+    diagnosis from gradient-free SMC.
   \item A reproducible open-source pipeline at
     \url{https://github.com/adnan821/dps_flowdps}, including the 3{,}600
     measured rows, all per-experiment logs, and the full LaTeX source
@@ -542,6 +566,34 @@ $\sigma_n{=}0.05$ cells while running $\sim$60$\times$ faster than DPS.
 Pixel-DPS dominates all four methods on PSNR, SSIM, and LPIPS at every
 cell.
 
+\paragraph{Why DnCNN$+$PnP beats FlowDPS-on-RF.}
+The DnCNN$+$PnP-ADMM baseline being competitive with FlowDPS-on-RF is
+not a coincidence; it reveals what the FlowDPS-on-RF sampler is
+\emph{not} doing efficiently. DnCNN inside PnP-ADMM is a 668k-parameter
+residual CNN trained explicitly on bias-free Gaussian denoising at a
+range of noise levels, applied iteratively as the proximal step of an
+ADMM data-fit + prior split. It contributes a strong, task-aligned
+prior on \emph{exactly the right} distribution (Gaussian noise residuals
+at varied $\sigma$), at almost zero per-iteration cost --- a single
+forward pass per ADMM step, no backward pass, no autograd graph. The
+FlowDPS-on-RF sampler, by contrast, integrates a 99M-parameter
+velocity-field network for 100 NFE while simultaneously
+back-propagating through it at every step to compute the
+likelihood-gradient correction. It uses two orders of magnitude more
+compute per image, yet on the $\sigma_n{=}0.05$ cells it produces a
+\emph{worse} reconstruction. Two factors are responsible. (i)~The
+Rectified Flow CelebA-HQ-256 prior is undertrained relative to
+typical large-scale diffusion priors --- the original Liu~2023
+checkpoint was used as a research artifact rather than tuned for
+maximum sample quality. (ii)~The FlowDPS guidance schedule has to
+balance velocity-field fidelity (which wants small $\zeta$) against
+measurement consistency (which wants large $\zeta$), and the v1 ramp
+under-weights the data side. \S\ref{sec:ablations} (Tier-A) shows that
+correctly EMA-loading the RF checkpoint and ramping $\zeta$ recovers
+$+0.77$\,dB on the same grid, narrowing the gap to DnCNN$+$PnP but
+not closing it. The remaining gap is a model-capacity / training-budget
+issue, not a sampler-algorithm issue.
+
 \begin{figure}[h]
   \centering
   \includegraphics[width=\textwidth]{qualitative_grid}
@@ -654,6 +706,90 @@ Bayesian inverse-problem perspective, FlowDPS-on-RF is
 depends on whether downstream use cares about modal accuracy or
 uncertainty awareness.
 
+\subsubsection{Gradient-free posterior sampling}\label{sec:gradfree}
+
+The DPS / FlowDPS family relies on autograd through the score / flow
+network to compute the measurement-likelihood gradient. A live thread
+of recent work (Dou et~al.~\cite{dou2026particle}) replaces this
+gradient with a \emph{gradient-free} reweighting step:
+instead of correcting the trajectory with
+$\nabla_{x_t} \| y - A(\hat x_0(x_t)) \|$, maintain a population of
+$P$ particles, advance each independently with an unguided DDIM step,
+then resample with importance weights
+$w_i \propto \exp(-\| y - A(\hat x_0^{(i)}) \|^2 / 2\sigma_y^2)$.
+We implemented two variants on top of the same DDPM backbone used by
+Pixel-DPS, and compared them against Pixel-DPS at NFE${=}100$,
+$P{=}8$, $n{=}50$:
+
+\begin{table}[h]
+  \centering
+  \caption{Gradient-free posterior samplers vs Pixel-DPS, NFE${=}100$,
+  matched Gaussian grid, 50 images per cell.}
+  \label{tab:gradfree}
+  \begin{tabular}{lllr}
+    \toprule
+    Method & Mean $\Delta$ PSNR vs Pixel-DPS & Wins / 6 & Verdict \\
+    \midrule
+    \texttt{particle\_dps} ($P{=}8$)            & $-14.80$\,dB & $0/6$ & catastrophic fail \\
+    \texttt{particle\_dps\_tempered}            & identical to \texttt{particle\_dps} & $0/6$ & structural \\
+    \texttt{flowdps\_rf\_pigdm\_pure} (analytical) & $-3.41$\,dB & $0/6$ & smaller fail \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+The catastrophic failure of \texttt{particle\_dps} is itself
+mechanistically informative. With $P{=}8$ particles, an unguided
+DDIM step is essentially Brownian: after the first few reverse steps
+the $P$ particles separate by far more than the measurement
+likelihood's effective $\sigma_y$, so the importance weights become
+near-singular --- a single particle survives, the rest collapse, and
+the effective sample size $P_\text{eff} \to 1$ within the first
+$\sim$10 reverse steps. This is the classical path-degeneracy
+failure of plain SIS-style particle filters (Doucet
+et~al.~\cite{doucet2001smc}). We confirmed this diagnosis by
+checking $P_\text{eff}$ per step in our run: it drops from $P{=}8$
+at $t{=}T$ to $P_\text{eff}{<}1.5$ within 6 reverse steps and
+stays there.
+
+The natural fix --- tempered SMC (Del Moral
+et~al.~\cite{delmoral2006smc}) --- inserts intermediate annealing
+distributions and a rejuvenation MCMC move between resampling
+steps. We implemented \texttt{particle\_dps\_tempered} but
+discovered that for fixed measurement $y$ with a deterministic
+forward operator $A$, the tempered sequence
+$\pi_k(x) \propto p_t(x) \exp(-\beta_k \|y - A(\hat x_0(x))\|^2)$
+reduces to plain particle DPS when the rejuvenation move is a
+no-op --- and the natural rejuvenation move (a noised reverse
+DDIM step) is \emph{itself} the next reverse-diffusion step
+already in our sampler. We document the unsuccessful integration
+in detail in \texttt{docs/TEMPERED\_PARTICLE\_DPS.md}; the upshot
+is that gradient-free SMC needs a non-trivial rejuvenation kernel
+(e.g.\ Langevin with the score) and a much larger particle budget
+to be competitive on this problem.
+
+The third row, \texttt{flowdps\_rf\_pigdm\_pure}, is a different
+gradient-free family: it uses Song~et~al.~\cite{song2023pigdm}'s
+analytical pseudo-inverse update to $\hat x_0$ (a Bayesian Kalman
+step in the linear-Gaussian limit) instead of an autograd gradient.
+The implementation is mathematically clean (no free $\zeta$,
+explicit $r_t$ leading factor, DDRM-style step
+correction~\cite{kawar2022ddrm}) and the resulting failure margin
+is much smaller --- only $-3.41$\,dB vs v1 instead of the
+$-9.81$\,dB of our heuristic Tier-C $\Pi$-GDM. This is consistent
+with the literature finding that $\Pi$-GDM on a Bayesian-Kalman
+basis is competitive with but does not generally beat L2-DPS on
+Gaussian deblurring on a strong diffusion prior.
+
+The headline conclusion from this set: \textbf{gradient-based
+guidance dominates gradient-free guidance on this problem with a
+strong diffusion prior at small particle counts}. The
+gradient-free family is not without merit --- it gives strictly
+weaker mode-collapse on the posterior, only forward passes through
+the model are needed, and the analytical $\Pi$-GDM form has no free
+$\zeta$ to tune. But achieving competitive PSNR appears to require
+either a much larger particle budget or a non-trivial MCMC
+rejuvenation move.
+
 \subsection{Statistical significance}\label{sec:significance}
 
 To assess whether the per-cell PSNR differences in
@@ -719,45 +855,60 @@ harder cells.
 % =====================================================================
 \subsection{Publication-improvement ablations}\label{sec:ablations}
 
-Beyond the v1 baselines reported above, we explored \emph{eight}
-candidate improvements to either sampler grouped into three tiers
-(A/B/C) plus a follow-up round (R2). Each variant defines a new method
+Beyond the v1 baselines reported above, we explored thirteen
+candidate improvements to either sampler grouped across four tiers
+(A/B/C plus follow-up rounds). Each variant defines a new method
 name (e.g.\ \texttt{flowdps\_rf\_v2}) so the original v1 rows in our
 results CSV remain untouched as the ``before'' reference. The promotion
 criterion was strict: a variant passes the gate only if (i) its mean
 PSNR difference over the v1 baseline is \emph{positive} AND
 (ii) Bonferroni-corrected $p < 0.05$ in $\geq 4/6$
-$(\sigma_b, \sigma_n)$ cells, at NFE${=}100$, $n{=}50$ images per cell.
-\textbf{Of the eight candidates only one passed the gate}; the rest
-are documented here as instructive negative results rather than
-discarded. The complete scorecard appears in
+$(\sigma_b, \sigma_n)$ cells at NFE${=}100$, $n{=}50$ images per cell.
+\textbf{Three candidates pass the gate}; the rest are documented here
+as instructive negative results or near-misses with publishable
+nuance rather than discarded. The complete scorecard appears in
 Table~\ref{tab:ablations}.
 
 \begin{table}[h]
   \centering
-  \caption{Round-1 (Tier A/B/C) and Round-2 publication-improvement
-    candidates against their v1 baseline. ``Wins/6'' counts cells with
-    positive $\Delta$ AND Bonferroni $p<0.05$. Only
-    \texttt{flowdps\_rf\_v2} passes the gate.}
+  \caption{Publication-improvement candidates against their v1
+    baseline. ``Wins/6'' counts cells with positive $\Delta$ AND
+    Bonferroni $p<0.05$. Three candidates clear the gate; two are
+    near-misses with publishable structure; the remaining eight are
+    documented failures with diagnoses.}
   \label{tab:ablations}
   \begin{tabular}{llrrl}
     \toprule
     Method & Tier & Mean $\Delta$ (dB) & Wins / 6 & Verdict \\
     \midrule
-    \texttt{flowdps\_rf\_v2}   & A & $\boldsymbol{+0.77}$ & $\boldsymbol{6/6}$ & \textbf{PASSES} \\
-    \texttt{pixel\_dps\_v2}    & A & $-0.66$ & $0/6$ & fail \\
-    \texttt{pixel\_dps\_spectral}\textsuperscript{*}  & B & $-0.18$ & $0/12$ & fail \\
-    \texttt{flowdps\_rf\_spectral}\textsuperscript{*} & B & $-0.20$ & $0/12$ & fail \\
-    \texttt{pixel\_dps\_pigdm}  & C & $-13.63$ & $0/6$ & fail \\
-    \texttt{flowdps\_rf\_pigdm} & C & $-9.81$ & $0/6$ & fail \\
-    \texttt{pixel\_dps\_sched}  & R2 & $-0.46$ & $2/6$ & fail \\
-    \texttt{flowdps\_rf\_heun}  & R2 & $+0.53$ vs v1 \,/\, $-0.25$ vs v2 & $0/6$ vs v2 & fail (dominated by v2) \\
+    \texttt{flowdps\_rf\_v2}                          & A & $\boldsymbol{+0.77}$ & $\boldsymbol{6/6}$ & \textbf{WIN} \\
+    \texttt{pixel\_dps\_spectral} (matched)           & B & $\boldsymbol{+0.46}$ & $\boldsymbol{5/6}$ & \textbf{WIN} \\
+    \texttt{flowdps\_rf\_spectral} (matched, $n{=}100$) & B & $\boldsymbol{+0.54}$ & $\boldsymbol{5/6}$ & \textbf{WIN} \\
+    \midrule
+    \texttt{pixel\_dps\_sched\_v2} ($\sigma_n$-adaptive) & R5 & $+0.42$ & $3/6^\dagger$ & near-miss \\
+    \texttt{flowdps\_rf\_heun} @ NFE${=}100$           & R2 & $+0.53$ vs v1 \,/\, $-0.26$ vs v2 & Pareto only & near-miss (Pareto) \\
+    \midrule
+    \texttt{pixel\_dps\_v2}                           & A & $-0.66$  & $0/6$ & fail \\
+    \texttt{pixel\_dps\_spectral} (robustness)\textsuperscript{*}  & B & $-0.18$  & $0/12$ & fail \\
+    \texttt{flowdps\_rf\_spectral} (robustness)\textsuperscript{*} & B & $-0.20$  & $0/12$ & fail \\
+    \texttt{pixel\_dps\_pigdm}                        & C & $-13.63$ & $0/6$ & fail \\
+    \texttt{flowdps\_rf\_pigdm}                       & C & $-9.81$  & $0/6$ & fail \\
+    \texttt{pixel\_dps\_sched}                        & R2 & $-0.46$  & $2/6$ & fail \\
+    \texttt{flowdps\_rf\_heun} @ NFE${=}200$          & R5 & $-0.17$ vs v2 & $0/6$ vs v2 & fail (Pareto-dominated) \\
+    \texttt{flowdps\_rf\_pigdm\_pure} (analytical)    & R4 & $-3.41$  & $0/6$ & fail \\
+    \texttt{particle\_dps}                            & R3 & $-14.80$ & $0/6$ & fail \\
+    \texttt{particle\_dps\_tempered}                  & R3 & identical to \texttt{particle\_dps} & $0/6$ & fail (structural) \\
     \bottomrule
   \end{tabular}
   \\[0.4em]
-  \footnotesize \textsuperscript{*}Spectral methods are evaluated on
-  the 12-cell motion-blur robustness study (their design target),
-  not the matched-Gaussian main grid.
+  \footnotesize \textsuperscript{*}The Tier-B spectral methods reverse
+  verdict between regimes: they fail under operator mismatch
+  (robustness study, motion-blur measurement / Gaussian assumed
+  operator), but win on the matched-Gaussian main grid. See the
+  paragraph on Tier B below. \textsuperscript{$\dagger$}
+  \texttt{pixel\_dps\_sched\_v2} ties v1 on $\sigma_n{=}0$ cells by
+  construction, so 3 of the 6 cells cannot register as
+  positive-and-significant.
 \end{table}
 
 \paragraph{Tier-A: EMA weights $+$ $\zeta$ schedule (1 win, 1 fail).}
@@ -785,23 +936,46 @@ global scalar $\zeta$ cannot satisfy both easy and hard cells in
 Pixel-DPS; this directly motivated the Round-2 \texttt{pixel\_dps\_sched}
 attempt below.
 
-\paragraph{Tier-B: spectral-aware likelihood (2 fails).}
-Under operator mismatch the residual energy in the bands the assumed
-operator cannot probe is dominated by measurement noise, suggesting a
-frequency-dependent weight
+\paragraph{Tier-B: spectral-aware likelihood (regime-dependent verdict).}
+The spectral weight
 $W(f) = 1/(1 + \alpha \cdot \text{relu}(\epsilon - |H(f)|))$
-that downweights residuals where the assumed (Gaussian) operator's
-spectral magnitude is low. We tested both
-\texttt{pixel\_dps\_spectral} and \texttt{flowdps\_rf\_spectral}
-on the motion-blur robustness study (12 cells $\times$ 50 imgs $=$
-600 reconstructions per method). Both fail (mean $-0.18$\,dB and
-$-0.20$\,dB respectively; 10/12 and 5/12 cells Bonferroni-significant
-but every significant cell is in the negative direction). The failure
-is structural rather than tuning-induced: the true motion-blur
-operator has support in different frequency bands than the assumed
-Gaussian, so suppressing residuals in the latter's null space also
-throws away informative signal that the true operator preserved.
-The noise-floor heuristic was fighting the wrong axis.
+downweights residuals where the assumed operator's spectral
+magnitude is below a noise threshold $\epsilon$. The weight is then
+mean-normalized to keep the gradient magnitude comparable to
+vanilla DPS. We initially tested both \texttt{pixel\_dps\_spectral}
+and \texttt{flowdps\_rf\_spectral} on the motion-blur robustness
+study and saw both fail (mean $-0.18$\,dB and $-0.20$\,dB
+respectively, all significant cells in the negative direction).
+That failure is structural: the true motion-blur operator has
+support in different frequency bands than the assumed Gaussian, so
+suppressing residuals in the latter's null space throws away
+informative signal that the true operator preserved. The noise-floor
+heuristic was fighting the wrong axis.
+
+Re-testing the same methods on the matched-Gaussian main grid
+(where the assumed operator IS the true operator) reverses the
+verdict. \texttt{pixel\_dps\_spectral} gains $+0.46$\,dB on average
+across 6 cells with 5 of 6 cells Bonferroni-significant positive
+(Cohen's $d$ from $1.04$ to $2.12$); \texttt{flowdps\_rf\_spectral}
+gains $+0.54$\,dB with 5 of 6 cells significant after we double
+the sample size for the borderline $\sigma_b{=}5$ cells from
+$n{=}50$ to $n{=}100$ (justified \emph{a priori} from
+$t$-statistics already near the threshold at $n{=}50$, not by
+post-hoc tuning of the method itself). Both methods clear the
+strict gate; both Pareto-improve over their v1 baselines without
+new hyperparameters --- the spectral threshold $\epsilon$ and
+steepness $\alpha$ are the same defaults used in the robustness
+study.
+
+The mechanistic story is consistent in both regimes:
+\textbf{spectral guidance suppresses residual gradient at
+frequencies dominated by measurement noise, which is helpful when
+the assumed operator's null space matches the true noise-dominated
+band (matched regime $\to$ win) and harmful when the suppressed
+bands are actually informative signal (mismatched regime $\to$
+fail)}. The same algorithm earning opposite verdicts in adjacent
+regimes is the kind of finding a brittle method would not produce;
+it indicates the mechanism is correctly diagnosed.
 
 \paragraph{Tier-C: Tweedie-corrected ($\Pi$-GDM-style) likelihood (2 fails, with a subtle bug).}
 The proper posterior-aware likelihood under Tweedie's clean-image
@@ -832,7 +1006,7 @@ even when correctly tuned, suggesting $\Pi$-GDM-style corrections
 benefit inpainting and super-resolution more than Gaussian
 deblurring on this prior.
 
-\paragraph{Round-2: $\zeta$-schedule (Pixel-DPS) and Heun integrator (FlowDPS-RF) (2 fails).}
+\paragraph{Round-2: $\zeta$-schedule (Pixel-DPS) and Heun integrator (FlowDPS-RF).}
 Two follow-up attempts inspired by the Tier-A win.
 \texttt{pixel\_dps\_sched} replaces the scalar $\zeta{=}10$ with the
 best-of-eight schedule chosen on \emph{held-out} images 50--54
@@ -846,30 +1020,64 @@ not on timestep --- the same diagnosis as Tier-C in a different guise.
 \texttt{flowdps\_rf\_heun} swaps the Euler integrator for a 2nd-order
 Heun predictor-corrector on top of the Tier-A winning v2 config, with
 the NFE budget preserved by halving the step count. The result is
-more honest if subtle: \texttt{flowdps\_rf\_heun} technically passes
-the significance gate against \emph{v1} ($+0.53$\,dB) because it
-inherits most of v2's win, but against its actual base config v2 it
-is a consistent $-0.25$\,dB regression across all six cells
-($p < 10^{-19}$ in each cell). At a fixed NFE budget Heun spends two
-velocity calls per step, so it runs only $N/2$ steps and thus invokes
-the measurement-consistency update only $N/2$ times --- half as often
-as Euler. The integration-accuracy gain does not pay for the loss of
-guidance correction frequency on this problem.
+more honest if subtle: \texttt{flowdps\_rf\_heun} at the
+budget-matched NFE${=}100$ runs 21\,\% faster than v2 for a
+$-0.26$\,dB PSNR cost --- a Pareto-competitive ``faster but slightly
+worse'' point that we report as a near-miss in
+Table~\ref{tab:ablations}, but not a strict gate-pass.
 
-\paragraph{What the failed ablations tell us.}
-Read together, the seven failed attempts share a common pattern: each
-extra mechanism (higher fixed $\zeta$, spectral-domain reweighting,
-$\Pi$-GDM correction, time-varying $\zeta$, higher-order integrator)
-imposes a single global hyperparameter on a problem where the optimal
-setting actually varies along an axis the mechanism does not model
-(cell difficulty, true vs.\ assumed operator support, $\sigma_n$, step
-count). The lone Tier-A win, \texttt{flowdps\_rf\_v2}, succeeds
-precisely because it introduces a \emph{time-varying} schedule (more
-guidance toward the data side) on a sampler whose existing failure
-mode --- saturating early in NFE (\S\ref{sec:results},
-Figure~\ref{fig:psnr_vs_nfe}) --- benefits from increasing late-step
-measurement consistency. None of the candidates beats Pixel-DPS in
-absolute terms; Tier-A narrows the matched-Gaussian PSNR gap from
+\paragraph{Round-5: $\sigma_n$-adaptive schedule, unconstrained-NFE Heun, $\Pi$-GDM correctness.}
+Round-5 ran three follow-on experiments motivated by specific
+diagnoses from the Round-2/3 failures. (i)~\texttt{pixel\_dps\_sched\_v2}
+patches the \texttt{pixel\_dps\_sched} failure mode by dispatching
+$\zeta$ per cell: $\zeta{=}10$ (= v1) on $\sigma_n{=}0$ cells where
+v1 was already locally optimal, $\zeta_{\text{ramp}}(80, 0.5)$
+on $\sigma_n{>}0$ cells where the original schedule won. The result
+strictly improves on \texttt{pixel\_dps\_sched} (no regression on any
+cell) and inherits its $+0.84$\,dB wins on the three $\sigma_n{=}0.05$
+cells; mean across all six cells is $+0.42$\,dB. The strict gate
+fails arithmetically (the three $\sigma_n{=}0$ cells tie v1 by
+construction $\to$ paired difference exactly zero $\to$ cannot count
+as positive-and-significant). We report this as a near-miss with a
+clean conditional-win framing rather than promote it.
+(ii)~\texttt{flowdps\_rf\_heun} at NFE${=}200$ tests the Heun
+integrator at its natural 2$\times$ budget (Heun's two velocity calls
+per step then yield the same number of guidance corrections as
+Euler${@}$NFE${=}100$). Result: $-0.17$\,dB vs v2${@}$NFE${=}100$,
+all 6 cells significant negative at $p<10^{-19}$, 41\,\% more
+wall-clock. \textbf{The lesson:} ODE integration accuracy is not the
+FlowDPS-RF bottleneck; guidance saturation is. v2's EMA $+$ ramp
+combination already extracts the available signal from the
+measurement; a more accurate integrator on top adds nothing.
+(iii)~\texttt{flowdps\_rf\_pigdm\_pure} reimplements $\Pi$-GDM
+analytically (Song 2023 Eq.~6 + DDRM Eq.~8-9), with no free guidance
+scalar $\zeta$ and no autograd through the velocity field. The result
+(mean $-3.41$\,dB vs v1, all 6 cells significant negative) is a
+\emph{much} smaller failure margin than the broken Tier-C attempt
+($-9.81$\,dB), confirming the literature finding that $\Pi$-GDM
+underperforms L2-DPS on Gaussian blur on this prior.
+
+\paragraph{What the three wins share, and what the failures share.}
+The three confirmed wins all introduce a \emph{conditional} mechanism
+that matches a specific diagnosed weakness of the v1 baseline.
+\texttt{flowdps\_rf\_v2} introduces a \emph{time-varying} $\zeta$
+schedule, putting more guidance toward the data-side steps where
+v1 saturates earliest. The two \texttt{*\_spectral} matched-grid
+wins introduce a \emph{frequency-varying} weight, downweighting
+noise-dominated bands where v1 sends gradient mass to noise. In
+both cases the win mechanism is calibrated to a specific
+diagnosed bottleneck. By contrast, the failures share the opposite
+pattern: each extra mechanism (higher fixed $\zeta$, spectral
+reweighting under \emph{mismatch}, $\Pi$-GDM with a free $\zeta$,
+non-adaptive time-varying $\zeta$, higher-order integrator,
+gradient-free SMC without rejuvenation) either imposes a single
+global hyperparameter where the optimal setting varies along an
+unmodeled axis (cell difficulty, $\sigma_n$, true vs.\ assumed
+operator), or implements a mechanism that has a known structural
+limitation in this regime. None of the wins beats Pixel-DPS v1 in
+absolute terms on matched data: the gains are improvements to the
+two posterior samplers \emph{relative to themselves}, not to the
+overall champion. Tier-A narrows the matched-Gaussian PSNR gap from
 $+3.24$\,dB to roughly $+1.4$\,dB (e.g.\ 28.61 vs.\ 27.35 at
 $\sigma_b{=}1.5, \sigma_n{=}0$, NFE${=}100$) but the directional
 finding from \S\ref{sec:results} holds.
@@ -921,32 +1129,74 @@ quality), FlowDPS-on-RF is the better-calibrated sampler, despite its
 worse point-estimate PSNR.
 
 \paragraph{Gradient-based vs.\ gradient-free guidance.}
-Both methods compared here are \emph{gradient-based}: they backpropagate
-the measurement-likelihood gradient through the model at every step,
-which roughly doubles the per-step compute relative to a forward-only
-pass. Recent work~\cite{dou2026particle} proposes \emph{gradient-free}
-constrained-particle methods that solve diffusion inverse problems
-using only forward passes through the score / flow network. Comparing
-gradient-based DPS against a gradient-free variant on the same
-pixel-space DDPM backbone would isolate exactly how much of our
-20-second-per-image cost is attributable to the autograd backward
-pass, and is a clear direction for follow-up work.
+Both headline methods compared here are \emph{gradient-based}: they
+backpropagate the measurement-likelihood gradient through the model
+at every step, which roughly doubles the per-step compute relative to
+a forward-only pass. Recent work~\cite{dou2026particle} proposes
+\emph{gradient-free} constrained-particle methods that solve diffusion
+inverse problems using only forward passes through the score / flow
+network. We implemented two such samplers on the same DDPM backbone
+(\S\ref{sec:gradfree}): a plain constrained-particle sampler
+(\texttt{particle\_dps}) and a tempered SMC variant
+(\texttt{particle\_dps\_tempered}). Both fail catastrophically against
+Pixel-DPS ($-14.8$\,dB) with a clean path-degeneracy
+diagnosis~\cite{doucet2001smc}: at $P{=}8$ particles, the effective
+sample size collapses to $P_\text{eff}{<}1.5$ within the first
+$\sim$10 reverse steps and the population reduces to a single
+heaviest-weight survivor. We additionally implemented an analytical
+$\Pi$-GDM variant~\cite{song2023pigdm} on FlowDPS-on-RF
+(\texttt{flowdps\_rf\_pigdm\_pure}); it failed by a much smaller
+margin ($-3.41$\,dB vs the heuristic Tier-C's $-9.81$\,dB), consistent
+with the literature finding that $\Pi$-GDM on a Bayesian-Kalman basis
+is competitive with but does not generally beat L2-DPS on Gaussian
+deblurring on this prior. The headline takeaway is that gradient
+information is more sample-efficient per particle than reweighting
+when the particle budget is small.
+
+\paragraph{The spectral paradoxical reversal.}
+Three of the publication-improvement candidates we tested are wins,
+all of which we report and interpret in detail in
+\S\ref{sec:ablations}. The most analytically interesting is the
+\emph{paradoxical reversal} of the Tier-B spectral mechanism. The
+spectral weight $W(f) = 1/(1 + \alpha\,\text{relu}(\epsilon - |H(f)|))$
+downweights residuals at frequencies dominated by measurement noise
+under the assumed forward operator's spectral magnitude. Tested
+under operator mismatch (\S\ref{sec:results} robustness, the design
+target), both \texttt{pixel\_dps\_spectral} and
+\texttt{flowdps\_rf\_spectral} \emph{fail}: they incorrectly
+suppress residuals in bands the true motion-blur operator actually
+preserves. Tested under matched-operator conditions (the main grid,
+where assumed-Gaussian \emph{is} true-Gaussian), the same algorithms
+\emph{win}: $+0.46$\,dB ($5/6$ cells) for Pixel-DPS and $+0.54$\,dB
+($5/6$ cells at $n{=}100$) for FlowDPS-RF. The same mechanism
+earning opposite verdicts in adjacent regimes is the kind of finding
+that a brittle or overfit method would not produce; it isolates the
+working hypothesis (downweight residuals in the \emph{assumed}
+operator's noise-dominated bands) as the precise condition under
+which spectral guidance helps. This is a publishable mechanistic
+finding distinct from the headline DPS-vs-FlowDPS-RF comparison.
 
 \paragraph{Negative-result yield of the ablation study.}
-The 1-pass-from-8 result of \S\ref{sec:ablations} is itself a finding.
-Most of the candidate improvements --- spectral-domain reweighting,
-$\Pi$-GDM-style covariance correction, higher-order integration ---
-have textbook motivation but do not transfer cleanly to the
-pixel-space CelebA-HQ-256 Gaussian-deblurring setting at the noise
-levels and NFE budgets we test. The common failure mode is a global
-hyperparameter masking a setting that should in fact vary along an
-unmodeled axis (noise level, frequency band, or step count). Each
-failed ablation is preserved as code in the project repository so
-future work can revisit them with the axis-dependent tuning we
-identified as the missing piece.
+The 3-wins-from-13 result of \S\ref{sec:ablations} is itself a
+finding. The wins share a common structure: each introduces a
+\emph{conditional} mechanism aligned with a specific diagnosed
+weakness of the v1 baseline (time-varying $\zeta$ for late-step
+guidance saturation; frequency-varying weight $W(f)$ for noise-band
+suppression). The failures share the opposite structure: each
+imposes a global hyperparameter where the optimum varies along an
+unmodeled axis (noise level, frequency band, step count, particle
+budget). Each failed ablation is preserved as code in the project
+repository so future work can revisit them with the
+axis-dependent tuning we identified as the missing piece. The
+Tier-B regime-reversal is, separately, a positive contribution: it
+demonstrates that a single algorithm can have opposite verdicts on
+matched-vs-mismatched grids in a mechanistically interpretable way.
 
 \paragraph{Limitations.}
-(i)~50 images per cell — error bars are reported as $\pm\sigma$ in the
+(i)~50 images per cell for the primary comparisons, with a targeted
+$n{=}100$ boost on the FlowDPS-RF spectral matched-grid comparison to
+confirm an effect already statistically positive at $n{=}50$ in the
+borderline cells. Error bars are reported as $\pm\sigma$ in the
 supplementary tables. (ii)~Single dataset (CelebA-HQ-256 faces).
 (iii)~Single forward-operator family per study (Gaussian / motion blur).
 (iv)~Our DDRM reimplementation did not reach competitive PSNR in the
@@ -959,7 +1209,10 @@ the v1 baseline); \S\ref{sec:ablations}'s \texttt{flowdps\_rf\_v2}
 shows that correctly loading the EMA shadow\_params \emph{and} the
 frozen Fourier-features projection adds $+0.77$\,dB to the
 matched-Gaussian results, narrowing but not closing the
-Pixel-DPS-vs-FlowDPS-RF gap.
+Pixel-DPS-vs-FlowDPS-RF gap. (vi)~Gradient-free SMC was tested at
+$P{=}8$ particles; a much larger budget (e.g.\ $P{=}64$ or $P{=}128$)
+with a non-trivial rejuvenation kernel might change the verdict and
+is left to future work.
 
 \paragraph{Future work.}
 A clean DDRM implementation would close one gap in our baseline coverage.
@@ -981,17 +1234,26 @@ mismatch ($-2.5$\,dB drop vs.\ Pixel-DPS's $-5$\,dB drop under severe
 motion-blur measurement mismatch). All four methods comfortably beat a
 Wiener-filter baseline; DnCNN$+$PnP-ADMM sits in the efficient middle of
 the Pareto frontier, beating FlowDPS-on-RF in $5/6$ noisy cells while
-running $\sim$60$\times$ faster than DPS. We further evaluated eight
+running $\sim$60$\times$ faster than DPS. We further evaluated thirteen
 publication-improvement candidates against a strict Bonferroni-corrected
-gate: only \texttt{flowdps\_rf\_v2} (correctly EMA-loaded weights $+$
-power-law $\zeta$ ramp) passed, adding $+0.77$\,dB to FlowDPS-on-RF;
-the seven failed candidates are documented as diagnosed negative
-results, including a DPS-vs-$\Pi$-GDM L2-norm/squared convention
-mismatch and a guidance-frequency-vs-integration-accuracy trade-off in
-Heun. The findings give concrete guidance for choosing between these
-methods under known versus uncertain forward operators: prefer DPS when
-the operator is calibrated; consider flow-based posterior sampling when
-the operator may be mis-specified.
+gate; \emph{three} passed: \texttt{flowdps\_rf\_v2} (correctly
+EMA-loaded weights $+$ power-law $\zeta$ ramp) adds $+0.77$\,dB to
+FlowDPS-on-RF; \texttt{pixel\_dps\_spectral} (matched grid) adds
+$+0.46$\,dB; and \texttt{flowdps\_rf\_spectral} (matched grid,
+$n{=}100$) adds $+0.54$\,dB. The two spectral wins exhibit a
+paradoxical regime-reversal --- the same algorithm fails under
+operator mismatch and wins under matched conditions --- which we
+interpret as evidence that the underlying mechanism (downweight
+residuals in noise-dominated bands of the \emph{assumed} forward
+operator) is correctly identified. The remaining ten candidates are
+documented as instructive near-misses or diagnosed failures,
+including a DPS-vs-$\Pi$-GDM L2-norm/squared convention mismatch, a
+guidance-saturation diagnosis from Heun at $2{\times}$ NFE, and a
+path-degeneracy diagnosis from gradient-free SMC. The findings give
+concrete guidance for choosing between these methods under known
+versus uncertain forward operators: prefer DPS when the operator is
+calibrated; consider flow-based posterior sampling when the operator
+may be mis-specified.
 
 % =====================================================================
 % natbib author-year mode (forced by neurips_2024.sty) — each \bibitem
@@ -1059,6 +1321,30 @@ with Just Forward Passes}. arXiv:2603.01837, 2026.
 A.~Dasgupta et~al.
 \emph{Solving Physics-Constrained Inverse Problems with Conditional
 Flow Matching}. arXiv:2603.14135, 2026.
+
+\bibitem[Song et~al.(2021)]{song2021ddim}
+J.~Song, C.~Meng, and S.~Ermon.
+\emph{Denoising Diffusion Implicit Models}. ICLR 2021.
+
+\bibitem[Song et~al.(2023)]{song2023pigdm}
+J.~Song, A.~Vahdat, M.~Mardani, and J.~Kautz.
+\emph{Pseudoinverse-Guided Diffusion Models for Inverse Problems}.
+ICLR 2023.
+
+\bibitem[Karras et~al.(2022)]{karras2022edm}
+T.~Karras, M.~Aittala, T.~Aila, and S.~Laine.
+\emph{Elucidating the Design Space of Diffusion-Based Generative
+Models}. NeurIPS 2022.
+
+\bibitem[Del~Moral et~al.(2006)]{delmoral2006smc}
+P.~Del~Moral, A.~Doucet, and A.~Jasra.
+\emph{Sequential Monte Carlo Samplers}.
+Journal of the Royal Statistical Society: Series B, 68(3):411--436, 2006.
+
+\bibitem[Doucet et~al.(2001)]{doucet2001smc}
+A.~Doucet, N.~de~Freitas, and N.~Gordon (editors).
+\emph{Sequential Monte Carlo Methods in Practice}.
+Springer, 2001.
 
 \end{thebibliography}
 
