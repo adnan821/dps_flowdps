@@ -222,8 +222,9 @@ and can in principle achieve comparable image quality with fewer
 function evaluations. FlowDPS~\cite{kim2025flowdps} adapts DPS-style
 likelihood guidance to flow models by injecting a likelihood-gradient
 correction into the deterministic velocity field. The official FlowDPS
-implementation is built on the SD3 latent transformer flow model and
-operates at $768 \times 768$ in latent space.
+implementation is built on the SD3 latent transformer flow
+model~\cite{esser2024sd3} and operates at $768 \times 768$ in latent
+space.
 
 Beyond DPS-style likelihood-gradient guidance, several recent works
 explore alternative posterior-sampling regimes for diffusion- and
@@ -263,7 +264,7 @@ $\epsilon \sim \mathcal{N}(0, \sigma_n^2 I)$ with
 $\sigma_n \in \{0.0, 0.05\}$.
 
 \paragraph{Pixel-DPS.}
-We adopt the DDPM reverse process with DDIM sampling. At each reverse
+We adopt the DDPM reverse process with DDIM sampling~\cite{song2021ddim}. At each reverse
 step $t$, the model predicts $\epsilon_\theta(x_t, t)$, from which we
 derive the Tweedie clean-image estimate
 \begin{equation}
@@ -500,7 +501,14 @@ is in the supplementary material.
     proposal's hypothesized flow-speed advantage.
 \end{enumerate}
 
-\subsection{Operator-mismatch robustness study}
+\subsection{Operator-mismatch robustness study}\label{sec:robustness}
+
+The robustness study follows the spirit of common-corruption
+benchmarks~\cite{hendrycks2019corrupt}: keep the model fixed and
+perturb the test distribution along a controlled axis (here, the
+forward operator) to expose failure modes that the matched-condition
+evaluation cannot reach.
+
 
 The true forward operator is $\text{motion}(L, \theta)$ but the sampler's
 likelihood assumes Gaussian with fixed $\sigma_b{=}3.0$. 50 images per
@@ -1018,7 +1026,8 @@ gate (mean $-0.46$\,dB), with a clean cell-level split: it
 scaling for Pixel-DPS apparently depends on measurement noise level,
 not on timestep --- the same diagnosis as Tier-C in a different guise.
 \texttt{flowdps\_rf\_heun} swaps the Euler integrator for a 2nd-order
-Heun predictor-corrector on top of the Tier-A winning v2 config, with
+Heun predictor-corrector (as analyzed for diffusion-style samplers by
+Karras et~al.~\cite{karras2022edm}) on top of the Tier-A winning v2 config, with
 the NFE budget preserved by halving the step count. The result is
 more honest if subtle: \texttt{flowdps\_rf\_heun} at the
 budget-matched NFE${=}100$ runs 21\,\% faster than v2 for a
