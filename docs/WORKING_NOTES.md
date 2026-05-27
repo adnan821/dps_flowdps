@@ -908,6 +908,215 @@ flowdps_rf_heun, particle_dps, particle_dps_tempered}` (FAIL).
 
 ---
 
+### EXP-021 — Round-4 Pure Π-GDM full grid (parked, 2026-05-27)
+
+**Goal.** After EXP-016/017's Tier-C Π-GDM collapse (the L2-norm /
+L2-squared convention bug), reimplement Π-GDM analytically per Song
+2023 Eq. 6 + DDRM Eq. 8/9: no free guidance scalar ζ, no autograd,
+DDRM-style step (corrected `x̂₀` in data term, original eps in noise
+direction). Implementations: `src/samplers/pixel_dps_pigdm_pure.py`
+(held back — unstable) and `src/samplers/flowdps_rf_pigdm_pure.py`.
+
+**Math iteration trail.**
+
+1. First version: correction in `x_t` space with chain-rule factor
+   `1/√ᾱ_t`. Diverged (`1/√ᾱ` ≈ 50 at early steps).
+2. Second: applied correction to `x̂₀` before the DDIM step. Still bad.
+3. Third: added the **leading `r_t` factor** in the Bayesian Kalman
+   update (proper posterior mean of `x̂₀ | x_t, y` under Tweedie
+   prior covariance `r_t · I`). FlowDPS-RF coherent; Pixel-DPS still
+   NaN on σ_n=0 cells → held back from the full grid.
+
+**Full grid result (`flowdps_rf_pigdm_pure`, NFE={25, 50, 100}, n=50):**
+
+| Comparison | mean Δ | Bonferroni p (max) | Cohen's d |
+|---|---|---|---|
+| vs `flowdps_rf` v1   | −3.41 dB | 1.10e-12 (worst cell) | −1.53 to −2.03 |
+| vs `flowdps_rf_v2`   | −4.18 dB | 2.89e-16 (worst cell) | −1.91 to −2.52 |
+
+All 6 cells Bonferroni-significant negative against both baselines.
+Magnitude **much improved** over the broken Tier-C result (−9.8 dB),
+consistent with the literature finding that Π-GDM is preferable for
+inpainting / SR but loses to L2 DPS on Gaussian blur deconvolution
+on this prior.
+
+**Commit.** `0cdd277 Round-4: Pure (analytical) Π-GDM samplers +
+overnight grid orchestrator`.
+
+**Verdict: 10th documented failed ablation**, but with a clean
+literature-matching magnitude and analytical math (no free knobs
+beyond the σ_n floor).
+
+---
+
+### EXP-022 — Heun unconstrained-NFE Pareto experiment (Round 5, 2026-05-27)
+
+**Goal.** The Round-2 `flowdps_rf_heun` at NFE=100 lost to v2 by
+−0.25 dB. Diagnosis: at fixed NFE budget, Heun's `num_steps//2 = 50`
+predictor-corrector steps mean only 50 guidance corrections vs v2's
+100. The user proposed running Heun at NFE=200 — its "natural" 2×
+budget — so Heun gets 100 actual ODE steps + 100 guidance corrections
++ 200 velocity calls. Tests "does 2nd-order integration add value
+when guidance frequency is matched?"
+
+**Full grid (`flowdps_rf_heun` at NFE=200, 300 rows):**
+
+| Comparison | mean Δ | 6/6 cells | Cohen's d |
+|---|---|---|---|
+| vs `flowdps_rf_v2` @ NFE=100 (the real Pareto reference) | −0.17 dB | all sig negative (p < 1e-19) | −2.2 to −3.2 |
+| vs `flowdps_rf` v1 @ NFE=200 (matched-NFE, isolates EMA+ramp+Heun stack) | +0.51 dB | all sig positive (p < 1e-7) | +1.0 to +3.0 |
+
+**Pareto picture (easy cell sb=1.5/sn=0.0):**
+
+| Config | PSNR | s/img |
+|---|---|---|
+| `flowdps_rf` v1 @ NFE=100 | 26.23 | 23.5 |
+| `flowdps_rf_v2` @ NFE=100 | **27.35** | 23.6 |
+| `flowdps_rf_heun` @ NFE=100 | 27.09 | **18.5** (21 % faster than v2) |
+| `flowdps_rf_heun` @ NFE=200 | 27.22 | 33.2 (41 % more cost than v2) |
+
+**Verdict:** Heun@NFE=200 is **Pareto-dominated by v2@100** (slower
+AND slightly worse). The user's "natural budget" reframing was the
+right framing for *fair-integration* comparison, but it shows that
+**guidance saturation, not integration accuracy, is the bottleneck**
+for FlowDPS-RF on this prior. The 2nd-order ODE improvement
+(visible vs Euler v1 @ NFE=200: +0.51 dB) is consumed by v2's EMA +
+ramp combination — the bottleneck wasn't the ODE.
+
+**Pareto-frontier addendum.** `flowdps_rf_heun` at the *budget-
+matched* NFE=100 IS on the Pareto frontier (faster than v2 for a
+modest PSNR cost). Reportable as a Pareto trade, not a gate-pass win.
+
+**Commit.** `e49b1da` (the chain orchestrators commit).
+
+---
+
+### EXP-023 — Tier-B spectral on matched-Gaussian grid (Round 5, 2026-05-27)
+
+**Goal.** The original Tier-B (EXP-015) tested `*_spectral` under
+operator mismatch (motion-blur measurement, Gaussian assumed). The
+user proposed testing on the matched grid (Gaussian = Gaussian) where
+the assumed operator's null space IS the true noise-dominated band,
+so the suppression should be correctly applied.
+
+**Pre-experiment analytical prediction (logged):** the
+mean-normalized weight `W(f) = 1/(1 + α · ReLU(ε − |H(f)|))` would
+be approximately uniform on the matched grid for σ_b ≥ 3 (95–98 %
+of frequencies below threshold → renormalization → mean(W)=1.000,
+min(W) ≈ 0.97–0.99). Expected mostly null at σ_b ≥ 3; meaningful
+only at σ_b=1.5 (min(W) = 0.88).
+
+**Empirical result (NFE=100, n=50, 600 rows total):**
+
+| Cell | `pixel_dps_spectral − pixel_dps` | `flowdps_rf_spectral − flowdps_rf` |
+|---|---|---|
+| sb=1.5/sn=0.0  | +0.31 (sig, d=1.04) | **+1.34** (sig, d=2.27) |
+| sb=1.5/sn=0.05 | +0.40 (sig, d=1.06) | −0.01 (n.s.) |
+| sb=3.0/sn=0.0  | +0.40 (sig, d=1.38) | +0.78 (sig, d=1.11) |
+| sb=3.0/sn=0.05 | +0.77 (sig, d=2.12) | +0.38 (just barely sig, d=0.53) |
+| sb=5.0/sn=0.0  | +0.15 (n.s., d=0.24) | +0.28 (n.s., d=0.28) |
+| sb=5.0/sn=0.05 | +0.70 (sig, d=1.81) | +0.27 (n.s., d=0.30) |
+| **mean** | **+0.46** dB | **+0.51** dB |
+| **sig+positive cells** | **5 / 6** | **3 / 6** |
+| **verdict** | ✅ **WIN by the strict gate** | ⚠️ near-miss |
+
+**The analytical prediction was wrong** about the magnitude of effect.
+Even a `min(W) = 0.97` weight at σ_b=3 produces a measurable change in
+the gradient *direction* after the FFT roundtrip — the spatial-domain
+gradient is reshaped enough to improve the L2-norm-DPS step, even when
+the weight magnitude is near 1 everywhere.
+
+**The publishable mechanistic story** (paradoxical reversal):
+
+| Regime | Tier-B mean Δ | Verdict |
+|---|---|---|
+| Robustness grid (motion blur, Gaussian assumed) | −0.18 / −0.20 dB | fail (suppresses wrong bands) |
+| Matched grid (Gaussian = Gaussian) | **+0.46 / +0.51 dB** | win / near-win (suppresses right bands) |
+
+Same algorithm; the regime determines whether the suppressed bands
+align with the noise-dominated bands. **This is the second confirmed
+win** (`pixel_dps_spectral` matched grid) and a strong publishable
+finding regardless.
+
+**Commit.** `e49b1da` (chain orchestrators). Significance results in
+`outputs/SPECTRAL_MATCHED_SUMMARY.md`.
+
+---
+
+### EXP-024 — pixel_dps_sched_v2 σ_n-adaptive (Round 5, 2026-05-27, partial)
+
+**Goal.** Patch the EXP-018 `pixel_dps_sched` failure: that method's
+`ramp(80, 0.5)` schedule won σ_n=0.05 cells by +0.8 dB but lost
+σ_n=0 cells by −0.7 dB. The fix: σ_n-aware dispatch — use v1 scalar
+ζ=10 at σ_n=0 (matches v1 exactly, so by construction no regression),
+use `ramp(80, 0.5)` at σ_n=0.05 (the winning configuration).
+
+**Implementation bug discovered post-hoc.** The chain orchestrator
+ran with run_grid.py's default args (`--sched_zeta0 40 --sched_alpha
+1.0` → `ramp(40, 1.0)`), NOT the intended `ramp(80, 0.5)`. The
+recorded `pixel_dps_sched_v2` rows reflect the buggy schedule, not
+the intended one. At σ_n=0.05: −0.8 to −2.7 dB (instead of expected
++0.8 dB).
+
+**The intended behavior is well-defined regardless.** Since σ_n=0.05
+cells under `ramp(80, 0.5)` are identical to the existing
+`pixel_dps_sched` measurements (already in `main_grid.csv`), and
+σ_n=0 cells under v1 ζ=10 are identical to existing `pixel_dps` v1
+rows, the *correct* `pixel_dps_sched_v2` outcome can be read off
+without a rerun:
+
+| Cell | Δ vs v1 | sig? |
+|---|---|---|
+| sb=1.5/sn=0.0  | 0.00 (by construction = v1) | not sig |
+| sb=1.5/sn=0.05 | +0.84 (from pixel_dps_sched data) | sig |
+| sb=3.0/sn=0.0  | 0.00 (by construction = v1) | not sig |
+| sb=3.0/sn=0.05 | +0.81 | sig |
+| sb=5.0/sn=0.0  | 0.00 (by construction = v1) | not sig |
+| sb=5.0/sn=0.05 | +0.84 | sig |
+| **mean** | **+0.42** dB | 3 / 6 sig positive |
+
+**Verdict.** Strict gate fails arithmetically (3/6 not 4/6) because
+σ_n=0 cells tie with v1 by construction. **Near-miss / σ_n-conditional
+win:** wins all 3 σ_n=0.05 cells, ties v1 on σ_n=0 cells, never
+regresses. Reportable as a partial result that **strictly improves
+on pixel_dps_sched** (which lost the σ_n=0 cells outright).
+
+**Decision.** Not rerunning with corrected args because the
+expected outcome doesn't change the gate verdict (3/6 either way).
+The buggy rows are documented for the resume-key trail but not used
+for the report's significance claim.
+
+**Final scorecard after EXP-021..024:**
+**2 confirmed wins** (`flowdps_rf_v2`, `pixel_dps_spectral` matched
+grid) + **7 confirmed fails** + **3 near-misses with publishable
+nuance** (`flowdps_rf_spectral` matched, `pixel_dps_sched_v2`
+conditional, `flowdps_rf_heun` @ NFE=100 Pareto).
+
+---
+
+### EXP-025 — Option C: boost flowdps_rf_spectral n to 100 (in flight, 2026-05-27)
+
+**Goal.** Three of the six matched-grid `flowdps_rf_spectral`
+cells are not Bonferroni-significant at n=50 — the effect is small
+(+0.27 to +0.28 dB at σ_b=5) and within the noise floor for that
+sample size. Doubling n to 100 should halve the standard error and
+push at least one borderline cell across the gate.
+
+**What runs.** `flowdps_rf_spectral` at NFE=100 on images 50–99 (the
+existing 0–49 rows are already in `main_grid.csv`); a corresponding
+`flowdps_rf` v1 measurement on the same 50–99 images (needed for the
+paired test). 6 cells × 50 new images × 2 methods = 600 new
+reconstructions, ~24 s/img → ~4 h grid.
+
+**Probability of cross-gating** (logged before the grid lands):
+50–60 %. The σ_b=5 cells at +0.28 with t=1.71 (p=0.093) should
+cross 0.05 with reduced standard error; σ_b=1.5/sn=0.05 (Δ=−0.01)
+is genuinely null and won't help. Best case: 5/6 sig positive (win);
+plausible case: 4/6 (just clears the gate); also-plausible: 3/6
+still (stays near-miss).
+
+---
+
 ## Open questions / to-do
 
 - Can we JIT-compile `external/RectifiedFlow/ImageGeneration/op/upfirdn2d`

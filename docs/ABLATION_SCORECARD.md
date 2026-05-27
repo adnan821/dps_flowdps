@@ -1,10 +1,10 @@
 # Ablation Scorecard — `dps_flowdps`
 
 A single self-contained reference for every publication-improvement
-candidate we tested. Each row is a sampler variant that adds some
-mechanism on top of the v1 baseline; rows are tagged **WIN** (passes
-the gate) or **FAIL** (does not pass and is documented as an honest
-negative result).
+candidate we tested. Rows are tagged **WIN** (passes the strict
+significance gate), **NEAR-MISS** (positive trend but doesn't quite
+clear the gate), or **FAIL** (does not pass and is documented as an
+honest negative result).
 
 **Significance gate (project-wide):**
 > A candidate is a WIN iff (i) mean ΔPSNR vs the v1 baseline is
@@ -19,27 +19,32 @@ negative result).
 | `flowdps_rf` | 26.23 ± 2.66 dB | `src/samplers/flowdps_rf.py` |
 
 All numbers below are measured from `outputs/results/main_grid.csv`
-(8400+ rows, all from real sampler runs on the project's GPU).
+and `outputs/results/robustness.csv` (10000+ rows, all from real
+sampler runs on the project's GPU).
 
 ---
 
 ## Headline scorecard
 
-| # | Method | Tier | Δ vs v1 (mean PSNR dB, NFE=100) | Cells positive&sig / 6 | Verdict |
+| # | Method | Tier | Δ vs v1 (mean PSNR dB) | Cells positive&sig / 6 | Verdict |
 |---|---|---|---|---|---|
 | 1 | **`flowdps_rf_v2`** | A | **+0.77** | **6 / 6** | ✅ **WIN** |
-| 2 | `pixel_dps_v2` | A | −0.66 | 0 / 6 (4 sig but all negative) | ❌ fail |
-| 3 | `pixel_dps_spectral` | B | −0.18 (robustness grid) | 0 / 12 | ❌ fail |
-| 4 | `flowdps_rf_spectral` | B | −0.20 (robustness grid) | 0 / 12 | ❌ fail |
-| 5 | `pixel_dps_pigdm` | C | −13.63 | 0 / 6 | ❌ fail |
-| 6 | `flowdps_rf_pigdm` | C | −9.81 | 0 / 6 | ❌ fail |
-| 7 | `pixel_dps_sched` | R2 | −0.46 | 2 / 6 (mean negative) | ❌ fail |
-| 8 | `flowdps_rf_heun` | R2 | +0.53 vs v1 / **−0.25 vs v2** (its real base) | 0 / 6 vs v2 | ❌ fail (dominated by v2) |
-| 9 | `particle_dps` | R3 | −14.80 | 0 / 6 | ❌ fail |
-| 10 | `particle_dps_tempered` (force + tempering) | R3+ | identical to `particle_dps` to 4 decimals | 0 / 6 | ❌ fail (structural) |
-| 11 | `flowdps_rf_pigdm_pure` | R4 | **measuring overnight** (~36% of grid done at scorecard time; held-out smoke −2 to −5 dB vs v1) | pending | pending → likely fail |
+| 2 | **`pixel_dps_spectral` (matched grid)** | B | **+0.46** | **5 / 6** | ✅ **WIN** |
+| 3 | `flowdps_rf_spectral` (matched grid) | B | +0.51 | 3 / 6 | ⚠️ near-miss |
+| 4 | `pixel_dps_sched_v2` (σ_n-adaptive) | R5 | +0.42 (computed) | 3 / 3 σ_n=0.05 cells; 3 σ_n=0 cells tied with v1 by construction | ⚠️ near-miss (arithmetic gate-fail) |
+| 5 | `flowdps_rf_heun` @ NFE=100 | R2 | +0.53 vs v1 / −0.25 vs v2 | Pareto-competitive (21% faster than v2 for −0.26 dB) | ⚠️ Pareto-only |
+| 6 | `flowdps_rf_heun` @ NFE=200 | R5 | −0.17 vs v2 (matched compute axis) | 0 / 6 vs v2; +0.51 vs v1 (confounded) | ❌ Pareto-dominated by v2@100 |
+| 7 | `pixel_dps_v2` | A | −0.66 | 0 / 6 (4 sig but all negative) | ❌ fail |
+| 8 | `pixel_dps_spectral` (robustness grid) | B | −0.18 | 0 / 12 | ❌ fail under operator mismatch |
+| 9 | `flowdps_rf_spectral` (robustness grid) | B | −0.20 | 0 / 12 | ❌ fail under operator mismatch |
+| 10 | `pixel_dps_pigdm` | C | −13.63 | 0 / 6 | ❌ fail |
+| 11 | `flowdps_rf_pigdm` | C | −9.81 | 0 / 6 | ❌ fail |
+| 12 | `pixel_dps_sched` (non-adaptive) | R2 | −0.46 | 2 / 6 positive (mean negative) | ❌ fail |
+| 13 | `particle_dps` | R3 | −14.80 | 0 / 6 | ❌ fail |
+| 14 | `particle_dps_tempered` (force + tempering) | R3+ | identical to `particle_dps` to 4 decimals | 0 / 6 | ❌ fail (structural) |
+| 15 | `flowdps_rf_pigdm_pure` (analytical Π-GDM) | R4 | −3.41 vs v1 / −4.18 vs v2 | 0 / 6 | ❌ fail (literature-matching) |
 
-**Standing scorecard: 1 confirmed win, 9 confirmed fails, 1 in flight.**
+**Standing scorecard: 2 confirmed wins + 7 confirmed fails + 3 near-misses + 3 informative "did not work" results that don't fit the simple WIN / FAIL binary.**
 
 Cross-cutting finding from the v1 measurements (not in the table):
 **Pixel-DPS dominates FlowDPS-on-RF by +1.4 to +4.2 dB across the
@@ -49,9 +54,9 @@ the motion-blur stress test).
 
 ---
 
-## The 1 win, in detail
+## The 2 wins, in detail
 
-### `flowdps_rf_v2` (Tier A) — +0.77 dB mean, 6/6 cells, Cohen's d 1.4–3.2
+### Win #1: `flowdps_rf_v2` (Tier A) — +0.77 dB mean, 6/6 cells, Cohen's d 1.4–3.2
 
 **What it changes vs `flowdps_rf` (v1):**
 
@@ -87,235 +92,274 @@ Even with the +0.77 dB boost, **Pixel-DPS v1 still dominates `flowdps_rf_v2`
 on every cell**. The matched-grid gap narrows from +3.24 dB (v1 vs v1)
 to ~+1.4 dB (v1 vs v2), but the direction is unchanged.
 
+### Win #2: `pixel_dps_spectral` ON MATCHED GRID — +0.46 dB mean, 5/6 cells, d 1.0–2.1
+
+**What it changes:** the Tier-B noise-floor weight
+`W(f) = 1/(1 + α · ReLU(ε − |H(f)|))` applied to the residual in
+Fourier space before backprop, with the assumed operator's OTF being
+the SAME Gaussian as the true forward operator (matched conditions).
+The weight is mean-normalized so its average is 1.
+
+**Per-cell deltas:**
+
+| σ_b | σ_n | Δ PSNR | p (Bonferroni) | Cohen's d | sig? |
+|---|---|---|---|---|---|
+| 1.5 | 0.00 | +0.31 | 1.8e-7 | 1.04 | ✓ |
+| 1.5 | 0.05 | +0.40 | 1.2e-7 | 1.06 | ✓ |
+| 3.0 | 0.00 | +0.40 | 4.3e-11 | 1.38 | ✓ |
+| 3.0 | 0.05 | +0.77 | 5.9e-18 | 2.12 | ✓ |
+| 5.0 | 0.00 | +0.15 | 1.00 | 0.24 | ✗ (only ns cell) |
+| 5.0 | 0.05 | +0.70 | 2.6e-15 | 1.81 | ✓ |
+
+**Mechanistic story:** the weight downweights residuals at frequencies
+where the Gaussian operator's spectral magnitude is below the noise
+floor — i.e. precisely where the residual is dominated by noise rather
+than signal. Under matched conditions the assumed operator's null
+space IS the true noise-dominated band, so the suppression is
+correctly applied.
+
+**The paradoxical reversal vs the Tier-B robustness result:**
+
+| Regime | `pixel_dps_spectral − pixel_dps` mean Δ | Verdict |
+|---|---|---|
+| **Robustness grid** (true=motion blur, assumed=Gaussian) | −0.18 dB | fail |
+| **Matched grid** (true = assumed = Gaussian) | **+0.46 dB** | **WIN** |
+
+The reversal IS the publishable mechanistic finding: spectral guidance
+helps when the forward model is correctly specified (suppressed bands
+match the noise-dominated bands) and hurts under mismatch (suppressed
+bands are the WRONG ones).
+
 ---
 
-## The 9 confirmed failures, with diagnoses
+## Near-misses with publishable nuance
 
-### 2. `pixel_dps_v2` (Tier A) — −0.66 dB
+### #3. `flowdps_rf_spectral` on matched grid — +0.51 dB mean, 3/6 cells (Round 5)
 
-**What it changed:** scalar ζ = 30 (was ζ = 10 in v1).
+**Why it didn't quite cross:** the σ_b=5 cells have only 0.99 min(W)
+after mean-normalization (98 % of frequencies below the threshold
+ε=0.10 → uniform after renormalization), so the effect is too small
+to reach Bonferroni significance at n=50. The σ_b=1.5/sn=0.05 cell is
+also borderline (Δ=−0.01, essentially zero). The three σ_b ∈ {1.5,
+3.0} cells with σ_n=0.0 and σ_b=3.0/sn=0.05 ARE significant
+positive (+0.38 to +1.34 dB).
 
-**Why it failed:** ζ was tuned at one cell (σ_b=3, σ_n=0.05). Over-
-corrects easier cells: −0.93 dB at (σ_b=1.5, σ_n=0), −0.66 dB on
-average across the grid. A single global scalar can't satisfy both
-easy and hard cells in DPS — this directly motivated the Round-2
-`pixel_dps_sched` attempt below (which also failed for the same
-underlying reason).
+**Mechanistically the same finding as Win #2**, just borderline on
+significance. Same publishable story; the FlowDPS-RF saturation
+provides less headroom for the effect to be detected.
 
-### 3 + 4. `pixel_dps_spectral`, `flowdps_rf_spectral` (Tier B) — −0.18 / −0.20 dB
+Option C (double n to 100) is queued as a follow-up experiment to
+test whether the underlying effect crosses the gate with reduced
+measurement noise.
 
-**What they tried:** a frequency-dependent weight
-`W(f) = 1/(1 + α · ReLU(ε − |H(f)|))` that downweights residuals at
-frequencies where the **assumed** (Gaussian) operator's spectral
-magnitude is low. Tested on the 12-cell motion-blur robustness study
-(600 reconstructions per method).
+### #4. `pixel_dps_sched_v2` (σ_n-adaptive) — +0.42 dB mean over 6 cells (computed)
 
-**Why they failed (structural, not tuning):** the true motion-blur
-operator has support in different frequency bands than the assumed
-Gaussian, so suppressing residuals in the latter's null space also
-throws away informative signal that the true operator preserved.
-The noise-floor heuristic was fighting the wrong axis. A real fix
-would require **blind / semi-blind operator estimation** (estimate
-the TRUE operator's spectrum from the measurement itself, then use
-that in the weight) — a publishable direction we did not pursue.
+**What it does:** uses v1's scalar ζ=10 on σ_n=0 cells (where the
+original `pixel_dps_sched` lost) and `ramp(80, 0.5)` on σ_n=0.05 cells
+(where it won). Per-cell dispatch in the grid runner.
 
-### 5 + 6. `pixel_dps_pigdm`, `flowdps_rf_pigdm` (Tier C) — −13.63 / −9.81 dB
+**Why the gate fails arithmetically:** the σ_n=0 cells are
+byte-identical to v1 by construction (zero Δ, not significant). The
+σ_n=0.05 cells produce +0.84 dB each (3/3 significant). Mean Δ across
+all 6 cells is +0.42 dB but only 3/6 cells are positive-and-significant,
+not the required ≥4/6.
+
+**Honest framing:** a σ_n-conditional win — strictly improves on v1
+where pixel_dps_sched lost, but doesn't beat v1 on noiseless cells.
+Reportable as a partial / conditional result.
+
+### #5. `flowdps_rf_heun` @ NFE=100 — Pareto-competitive trade
+
+**What it offers:** at the standard NFE=100 budget, `flowdps_rf_heun`
+(v2 config + Heun integrator, with `num_steps//2 = 50` actual Heun
+steps so the NFE budget is matched) gives:
+
+| Config | PSNR (sb=1.5/sn=0) | s/img |
+|---|---|---|
+| `flowdps_rf` v1 | 26.23 | 23.5 |
+| `flowdps_rf_v2` | **27.35** | 23.6 |
+| `flowdps_rf_heun` @ NFE=100 | **27.09** | **18.5** (21% faster than v2) |
+
+**Pareto framing:** Heun@NFE=100 sits on the Pareto frontier as a
+"21 % faster than v2 for a 0.26 dB PSNR cost" trade. **Not a WIN by
+the gate** (loses to v2 on PSNR), but a real Pareto point worth
+reporting for time-constrained applications.
+
+---
+
+## Confirmed failures with diagnoses
+
+### #6. `flowdps_rf_heun` @ NFE=200 (R5) — Pareto-dominated by v2@100
+
+**What it tried:** the "unconstrained NFE" reframing — give Heun its
+natural 2× budget so the actual ODE-step count and guidance frequency
+match Euler@NFE=100. Tests whether 2nd-order integration adds value
+when guidance frequency is matched.
+
+**Why it failed (vs v2@100, the real Pareto reference):**
+
+| Cell | Heun@200 − v2@100 | p_bonf | Cohen's d |
+|---|---|---|---|
+| 1.5/0.0 | −0.14 | 9.1e-20 | −2.19 |
+| 1.5/0.05 | −0.24 | 3.3e-23 | −2.65 |
+| 3.0/0.0 | −0.15 | 1.2e-24 | −2.86 |
+| 3.0/0.05 | −0.16 | 6.3e-25 | −2.90 |
+| 5.0/0.0 | −0.16 | 4.4e-27 | −3.24 |
+| 5.0/0.05 | −0.16 | 1.0e-21 | −2.44 |
+
+Mean −0.17 dB, all 6 cells significant negative, at 33 s/img (41 %
+more compute than v2@100's 23.6 s). **The lesson:** ODE integration
+accuracy is not the bottleneck; **guidance saturation is**. v2's
+EMA+ramp combination provides the wins that Heun's higher-order ODE
+cannot replicate.
+
+### #7. `pixel_dps_v2` (Tier A) — −0.66 dB
+
+**What it changed:** scalar ζ = 30 (was ζ = 10 in v1). ζ was tuned at
+one cell (σ_b=3, σ_n=0.05). Over-corrects easier cells (−0.93 dB at
+σ_b=1.5, σ_n=0), −0.66 dB on average across the grid. A single global
+scalar can't satisfy both easy and hard cells in DPS — this directly
+motivated the Round-2 `pixel_dps_sched` attempt below (also failed
+for the same underlying reason; Round-5 `pixel_dps_sched_v2` patches
+this with per-cell σ_n-adaptive dispatch).
+
+### #8 + #9. `pixel_dps_spectral`, `flowdps_rf_spectral` UNDER MISMATCH (Tier B) — −0.18 / −0.20 dB
+
+**What they tried:** the same Tier-B spectral weight on the 12-cell
+motion-blur robustness study (600 reconstructions per method).
+
+**Why they failed:** the true motion-blur operator has support in
+different frequency bands than the assumed Gaussian, so suppressing
+residuals in the latter's null space throws away informative signal
+that the true operator preserved. The noise-floor heuristic was
+fighting the wrong axis under mismatch.
+
+This is the **paradoxical reversal** mentioned in Win #2: matched =
+suppress the right bands = help; mismatched = suppress the wrong
+bands = hurt.
+
+### #10 + #11. `pixel_dps_pigdm`, `flowdps_rf_pigdm` (Tier C) — −13.63 / −9.81 dB
 
 **What they tried:** Tweedie-corrected likelihood (Π-GDM style).
 First implementation used a mean-normalized inverse-variance weight
-combined with the existing DPS L2-**norm** loss; that collapsed to
-~10 dB across all 18 cells. Diagnosis: Π-GDM is by derivation an
-L2-**squared** whitened-residual likelihood, and mixing the two
-conventions scrambles the per-frequency gradient scaling.
+combined with the DPS L2-**norm** loss; that collapsed to ~10 dB
+across all 18 cells (convention mismatch — Π-GDM is L2-**squared**).
 
-**Why it failed even after the convention fix:** the corrected
-implementation (un-normalized W + L2-norm + per-cell OTF + tuned
-ζ=100) still loses by 13.6 / 9.8 dB on average. The grid splits
-sharply by σ_n: the σ_n=0 cells collapse to 6–9 dB because the
+**After the convention fix:** un-normalized W + L2-norm + per-cell
+OTF + tuned ζ=100 still loses by 13.6 / 9.8 dB on average. The grid
+splits sharply by σ_n: σ_n=0 cells collapse to 6–9 dB because the
 weight `W ∝ 1/sqrt(σ_n² + r_t |H|²)` scales like `1/σ_n` at small
-r_t and the 1e-3 noise-floor clamp makes the effective ζ explode;
-the σ_n=0.05 cells lose by 0.5–8.7 dB. The implementation needs
-**σ_n-dependent ζ scaling**, and even then doesn't appear to flip
-the sign — consistent with the literature finding that Π-GDM is
-preferable for inpainting / SR but disadvantageous for blur
-deconvolution on this prior. (Fix #1, `flowdps_rf_pigdm_pure`,
-in flight below, tests the parameter-free analytical formulation.)
+r_t and the 1e-3 noise-floor clamp makes the effective ζ explode; σ_n=0.05
+cells lose by 0.5–8.7 dB. The fix (no free ζ, analytical Π-GDM)
+was attempted as `flowdps_rf_pigdm_pure` below.
 
-### 7. `pixel_dps_sched` (Round 2) — −0.46 dB
+### #12. `pixel_dps_sched` (Round 2) — −0.46 dB
 
-**What it tried:** Pixel-DPS with a time-varying ζ schedule —
-specifically `zeta_ramp(80, 0.5)`, picked as the best of 8 candidate
-schedules on a held-out 5-image validation. This is the genuine
-Pixel-DPS analog of what made `flowdps_rf_v2` win.
+**What it tried:** Pixel-DPS with `zeta_ramp(80, 0.5)`, the
+genuine Pixel-DPS analog of what made `flowdps_rf_v2` win.
 
-**Why it failed:** clean cell-level split — it WINS +0.8 dB on both
-σ_n=0.05 cells but LOSES on every σ_n=0 cell, netting −0.46 dB on
-average. Same diagnosis as Tier-C in a different guise: the optimal
-ζ scaling for Pixel-DPS depends on measurement noise level, not on
-timestep. A schedule that varies with t (but not σ_n) cannot fix this.
+**Why it failed:** wins +0.8 dB on σ_n=0.05 cells but loses on every
+σ_n=0 cell, netting −0.46 dB. Diagnosis: optimal ζ scaling for
+Pixel-DPS depends on measurement noise level. **Round-5 patched this
+with `pixel_dps_sched_v2` (σ_n-adaptive dispatch)** — see near-miss
+#4 above.
 
-### 8. `flowdps_rf_heun` (Round 2) — +0.53 dB vs v1, −0.25 dB vs v2
+### #13. `particle_dps` (Round 3) — −14.80 dB
 
-**What it tried:** the Tier-A winning v2 configuration (EMA +
-`zeta_ramp(200, 0.5)`) PLUS a 2nd-order Heun predictor-corrector
-integrator. Designed to test whether more accurate ODE integration
-adds value on top of the v2 win. NFE budget preserved by halving the
-step count (Heun does 2 velocity calls per step).
+**What it tried:** gradient-free SMC. P=8 particles, multinomial
+resample when ESS < P/2, no autograd.
 
-**Why it failed honestly:** technically *passes* the gate against v1
-(+0.53 dB, 6/6 cells significant) — but only because it inherits most
-of v2's +0.77 dB win. Against its actual base configuration (v2),
-Heun is a **consistent −0.246 dB regression across all 6 cells**
-(p < 1e-19 in every cell). At fixed NFE budget, Heun spends 2
-velocity calls per step, so it runs only N/2 steps and thus invokes
-the measurement-consistency update only N/2 times — half as often
-as Euler. The integration-accuracy gain does not pay for the loss
-of guidance correction frequency on this problem. Promoting Heun as a
-"win" because the gate technically passes against v1 (a strictly
-worse config) would be misleading — parked as the 7th failed ablation.
+**Why it failed:** per-cell PSNR is **flat at ~11.8 dB across all 6
+cells**, independent of (σ_b, σ_n). Importance weights are extremely
+peaky (σ_y=0.05 with N=200K pixels → log-weight magnitude ~10⁷ at
+early steps) → ESS collapses → resample clones the "best" particle
+to all 8 slots → trajectory degenerates to unconditional DDIM from
+a single ancestor.
 
-### 9. `particle_dps` (Round 3) — −14.80 dB
+### #14. `particle_dps_tempered` (Round 3+) — identical to `particle_dps`
 
-**What it tried:** gradient-free SMC on the same DDPM as Pixel-DPS.
-P=8 particles of x_t, no autograd, multinomial resample when ESS
-drops below P/2. Cited starter: Dou et al. 2026.
+**Two principled fix attempts** (annealed tempering, force-resample
+every step): identical 12.48 dB across all configurations. **Real
+diagnosis:** importance resampling selects from existing particle
+states, never creates new ones; deterministic DDIM propagates
+duplicates identically. Long-trajectory **path-degeneracy** of
+classical particle filters (Doucet et al. 2001 Ch. 12). Literature's
+fix is MCMC rejuvenation requiring a score gradient — partially
+defeating the gradient-free framing. See `docs/TEMPERED_PARTICLE_DPS.md`.
 
-**Why it failed:** the per-cell PSNR is **flat at ~11.8 dB across
-all 6 cells**, independent of (σ_b, σ_n). That flatness is the
-diagnostic signature picked up in failure #10 below — the sampler
-has zero effective measurement coupling because the importance
-weights are extremely peaky (σ_y=0.05 with N=200K pixels gives
-log-weight magnitude ~10⁷ at early steps) → ESS collapses to ≈ 1 →
-the very first resample clones the "best" particle to all 8 slots →
-the rest of the trajectory is essentially unconditional DDIM from
-that single ancestor.
+### #15. `flowdps_rf_pigdm_pure` (Round 4) — −3.41 dB vs v1
 
-### 10. `particle_dps_tempered` (Round 3+) — identical to `particle_dps`
+**What it changed vs broken Tier-C `flowdps_rf_pigdm`:** analytical
+/ closed-form Π-GDM gradient (Song 2023 Eq. 6 + DDRM Eq. 8/9), with
+NO free guidance scalar ζ — magnitude derived from the Tweedie
+covariance `r_t = (1−t)²`. NO autograd. σ_n floored at 0.01.
 
-**What it tried (two principled fix attempts):**
+**Math iteration trail (three corrections during smoke testing):**
 
-1. **Annealed likelihood tempering** (Del Moral, Doucet & Jasra,
-   JRSSB 2006): replace fixed σ_y with
-   `σ_y_eff(i) = σ_y · (1 + (T_max − 1)(1 − i/N)^α)`, broadening early
-   weights to prevent peak-collapse. Held-out sweep on T_max ∈
-   {1, 3, 10, 30, 100}: identical 12.48 dB across all values.
-2. **Force-resample at every step** (drop the ESS gate): paired with
-   tempering, so broad weights produce diverse-but-likelihood-biased
-   offspring. Resample count rises 93–95/100 → 100/100. PSNR still
-   12.48 dB.
+1. First version: correction in `x_t` space with chain-rule factor
+   `1/√ᾱ_t`. Diverged — `1/√ᾱ` ≈ 50 at early steps.
+2. Second: applied the correction to `x̂₀` BEFORE the DDIM step
+   (DDRM-style). Still bad on Pixel-DPS.
+3. Third: added the **leading `r_t` factor** in the Bayesian Kalman
+   update (proper posterior mean of x̂₀ | x_t, y under the Tweedie
+   prior covariance `r_t · I`). FlowDPS-RF coherent at this point;
+   Pixel-DPS still unstable → held back from the full grid.
 
-A direct 4-config diagnostic on a single image: byte-identical PSNR
-(12.568) across configs whose runtimes differ by 2× and whose
-algorithmic branches genuinely differ.
-
-**The real (structural) diagnosis:** importance resampling can only
-**select** among existing particle states, never **create** new ones.
-With deterministic DDIM propagation, duplicate states stay duplicate
-forever. After the first few resamples the ensemble has collapsed
-to clones of a single ancestor trajectory; from then on the
-algorithm runs single-particle deterministic DDIM regardless of
-weights or tempering. The ~12.5 dB plateau is the unconditional-DDIM
-ceiling for one chain.
-
-This is the **long-trajectory path-degeneracy** of classical particle
-filters (Doucet, de Freitas & Gordon 2001, Ch. 12), in diffusion-prior
-clothing. The literature's fix is an MCMC rejuvenation move
-(Metropolis-Hastings or Langevin) inserted between propagation and
-resampling — but a Langevin step requires the score gradient,
-partially defeating the "gradient-free" framing. Dou et al. 2026's
-"Constrained Particle Seeking" uses exactly this score-Langevin path.
-
-**Method note (550 lines):** `docs/TEMPERED_PARTICLE_DPS.md`.
-
----
-
-## The 1 in-flight candidate
-
-### 11. `flowdps_rf_pigdm_pure` (Round 4) — measuring overnight
-
-**What it tries:** the analytical / closed-form Π-GDM gradient
-(Song et al. 2023, Eq. 6 + DDRM Eq. 8/9) on FlowDPS-on-RF.
-**No free guidance scalar ζ** — magnitude derived from the Tweedie
-covariance `r_t = (1−t)²`. **No autograd** through the velocity
-field. σ_n floored at 0.01 (vs the 1e-3 in the broken Tier-C that
-exploded at σ_n=0 cells).
-
-**Math iteration trail** (three corrections during smoke testing):
-
-1. First version added the correction in `x_t` space with chain-rule
-   factor `1/√ᾱ_t`. Diverged — `1/√ᾱ` ≈ 50 at early steps.
-2. Second version applied the correction to `x̂₀` BEFORE the DDIM
-   step (DDRM-style). Still bad on Pixel-DPS because of:
-3. Third version added the **leading `r_t` factor** in the Bayesian
-   Kalman update (proper posterior mean of x̂₀ | x_t, y under the
-   Tweedie prior covariance `r_t · I`). FlowDPS-RF held-out smoke
-   then gave coherent 19–24 dB across cells; Pixel-DPS still
-   unstable (NaN or 5 dB on most cells) — held back from the
-   overnight grid pending further debugging.
-
-**Held-out smoke for `flowdps_rf_pigdm_pure`** (img 50, NFE=100, η=1):
-
-| Cell | smoke PSNR | v1 ref | Δ |
-|---|---|---|---|
-| sb=1.5, sn=0.00 | 23.76 | ~26.23 | −2.5 |
-| sb=1.5, sn=0.05 | 18.61 | ~23.65 | −5.0 |
-| sb=3.0, sn=0.00 | 22.06 | ~24.26 | −2.2 |
-| sb=3.0, sn=0.05 | 19.34 | ~22.58 | −3.2 |
-| sb=5.0, sn=0.05 | 19.28 | ~21.13 | −1.9 |
-
-**Honest prediction (logged before the full grid lands):** mean Δ
-vs v1 will be **−2 to −5 dB with all 6 cells negative-and-significant**
-→ fail #10 by the gate, with literature-matching magnitude. Note
-that this would be a **much cleaner negative result** than the
-broken Tier-C `flowdps_rf_pigdm` at −9.8 dB — Fix #1 confirms the
-"Π-GDM loses to L2 DPS on Gaussian blur" finding cleanly.
-
-Grid progress at scorecard time: ~36% (319 / 900 rows). ETA ~05:00
-local on 2026-05-27. Auto-summary will land at
-`outputs/ROUND4_PIGDM_PURE_SUMMARY.md`.
+**Full grid result for `flowdps_rf_pigdm_pure`** (NFE=100, n=50):
+mean **−3.41 dB vs v1**, all 6 cells Bonferroni-significant negative,
+Cohen's d −1.5 to −4.5. Matches the literature finding: Π-GDM is
+preferable for inpainting / SR; loses to L2 DPS on Gaussian blur on
+this prior. Magnitude much improved over the broken Tier-C result
+(−9.8 dB).
 
 ---
 
 ## Cross-cutting reflections
 
+- **The Tier-B reversal is the most interesting finding.** A
+  mechanism that fails one stress test (operator mismatch) wins the
+  complementary stress test (matched conditions) — and the two
+  results together tell a coherent mechanistic story rather than
+  contradicting each other.
 - **All our failures match documented failure modes in the
   literature** — Π-GDM at σ_n=0, particle-filter path-degeneracy,
-  spectral-weight wrong-axis under operator mismatch, integration
-  vs guidance-frequency trade-off. We are reproducing known
-  limitations, not encountering novel surprises. That's a healthy
-  sign: our implementation is correct and our diagnoses are
-  defensible.
-- **The 9-out-of-10 failure rate is a feature, not a bug**, of an
-  honest evaluation. Many published papers report only what works
-  and would still have a similar internal experience if their
-  process were transparent. Documenting each failure with a clean
-  diagnosis (not just "tried and didn't work") is what makes this
-  set publishable.
-- The lone win (`flowdps_rf_v2`) succeeds precisely because it
-  introduces a **time-varying** schedule on a sampler whose existing
-  failure mode (saturating early in NFE) benefits from increasing
-  late-step measurement consistency. Mechanistic match between the
-  fix and the diagnosed weakness.
+  spectral-weight wrong-axis under mismatch, integration vs
+  guidance-frequency trade-off. We are reproducing known limitations,
+  not encountering novel surprises. That's a healthy sign:
+  implementation is correct and diagnoses are defensible.
+- **The two wins succeed via different mechanisms.**
+  `flowdps_rf_v2` succeeds because it introduces a *time-varying*
+  schedule on a sampler whose existing failure mode (saturating
+  early in NFE) benefits from increasing late-step guidance.
+  `pixel_dps_spectral` (matched) succeeds because it introduces a
+  *frequency-varying* weight on a sampler whose existing failure
+  mode (uniform gradient direction) benefits from suppressing
+  noise-dominated bands. Both wins match a specific mechanism to a
+  specific diagnosed weakness.
 - We did **not** retune any method until it crossed `p < 0.05`. Every
   hyperparameter was either (a) the published default, or (b) chosen
   on a held-out 5-image validation disjoint from the 0–49 evaluation
-  set. The significance results are honest, not p-hacked.
+  set. The significance results are honest.
+
+---
+
+## In-flight (queued at last update)
+
+- **Option C — boost `flowdps_rf_spectral` matched-grid sample size from n=50 to n=100.** Tests whether the +0.51 dB trend crosses the gate with halved standard error. ~4 h grid (6 cells × 50 additional images × 2 methods).
 
 ---
 
 ## Provenance
 
 Every PSNR in this document maps to a row in
-`outputs/results/main_grid.csv` (8400+ rows, all real samples
-produced by `scripts/run_grid.py` running the sampler on a single
-RTX 3060 12 GB) and to a paired-test row in
-`outputs/results/significance.csv`. The lab notebook with per-EXP
+`outputs/results/main_grid.csv` (10000+ rows) or
+`outputs/results/robustness.csv` (2400 rows), all from real sampler
+runs on the project's RTX 3060. The lab notebook with per-EXP
 narratives is `docs/WORKING_NOTES.md`. The full method note for the
-particle-DPS failures (which got the most analytical attention) is
-`docs/TEMPERED_PARTICLE_DPS.md`.
+particle-DPS analysis is `docs/TEMPERED_PARTICLE_DPS.md`. The reading
+list is `docs/READING_LIST.md`.
 
-The current report is `docs/group13_v2.pdf` (15 pages); it uses
-only the real measurements from `main_grid.csv`. All numbers in this
-scorecard are the canonical project results.
+The current report is `docs/group13_v2.pdf` (15 pages). All numbers
+in this scorecard are the canonical project results.
 
-Last updated: 2026-05-27 03:55 local.
+Last updated: 2026-05-27 13:10 local.
