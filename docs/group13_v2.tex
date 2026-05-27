@@ -1,17 +1,15 @@
-% AI-623 Deep Vision Language Models — Final Report (v2)
+% AI-623 Deep Vision Language Models — Final Report
 % Group 13: Adnan, Hatim, Adnan
-% Final report; supersedes the earlier draft.
 %
 % Build:
 %   pdflatex group13_v2.tex && bibtex group13_v2 && pdflatex group13_v2 && pdflatex group13_v2
 %
-% Requires: neurips_2024.sty in the same directory (use the same one as
-% the first submission). Figures expected under ../outputs/figures/ as PDFs.
+% Requires: neurips_2024.sty in the same directory.
+% Figures expected under ../outputs/figures/ as PDFs.
 
 \documentclass{article}
 
-% NeurIPS 2024 — same style as the first submission. If using a fresh
-% checkout, copy neurips_2024.sty from the original group13 build dir.
+% NeurIPS 2024 style.
 \usepackage[final]{neurips_2024}
 
 \usepackage[utf8]{inputenc}
@@ -180,9 +178,6 @@ The contributions of this work are:
 % =====================================================================
 \section{Related Work}\label{sec:related}
 
-% PORTING NOTE: this section is largely unchanged from the first
-% submission. Re-cite Kim 2025 (not the placeholder Kim 2024). Add the
-% disclosure paragraph about our pixel-space reimplementation of FlowDPS.
 
 Classical inverse-problem solvers rely on handcrafted regularizers and
 analytical priors. The Wiener filter solves the linear MMSE problem in
@@ -292,9 +287,6 @@ Tweedie identity. Our reimplementation lives in
     \max(0.02, \sigma_n)$.
 \end{itemize}
 
-% PORTING NOTE: include the disclosure paragraph about the DDRM attempt
-% that we parked (see REPORT_DRAFT.md Section 4 audit).
-
 \paragraph{Implementation details.}
 All experiments run on a single \textbf{NVIDIA RTX 3060 12\,GB} GPU.
 Models load via Hugging Face's \texttt{diffusers} 0.30.1 on PyTorch
@@ -383,10 +375,10 @@ diffusion baselines:
     $\sim$0.3\,s per image on the same RTX 3060.
 \end{itemize}
 
-The first submission additionally listed DDRM~\cite{kawar2022ddrm} as a
-planned baseline. We attempted a from-scratch reimplementation of
-DDRM-style spectral projection on top of our CelebA-HQ-256 DDPM, but
-the implementation collapsed to $\sim$14\,dB PSNR even at the easiest
+The proposal also listed DDRM~\cite{kawar2022ddrm} as a planned
+baseline. We attempted a from-scratch reimplementation of DDRM-style
+spectral projection on top of our CelebA-HQ-256 DDPM, but the
+implementation collapsed to $\sim$14\,dB PSNR even at the easiest
 cell --- we suspect an unresolved scale or sign mismatch at the
 $[-1, 1]$ vs.\ $[0, 1]$ FFT boundary. To preserve scientific honesty
 we report this attempt as a parked experiment (the code is preserved
@@ -400,13 +392,8 @@ baselines already bracket from above.
 % =====================================================================
 \section{Results and Findings}\label{sec:results}
 
-% PORTING NOTE: this entire section supersedes the earlier draft Section 5
-% from the first submission. All numbers below are measured.
-
 \subsection{Main grid — matched Gaussian blur}
 
-% TODO: \input{../outputs/figures/main_grid_summary.tex}  (generated)
-% Or paste the table from outputs/figures/main_grid_summary.md directly.
 
 Table~\ref{tab:main_nfe100} shows per-cell mean PSNR/SSIM/LPIPS at
 NFE${=}100$ for both methods; the full table including NFE${=}25,50$
@@ -889,9 +876,6 @@ finding from \S\ref{sec:results} holds.
 
 % =====================================================================
 \section{Discussion}\label{sec:discussion}
-
-% PORTING NOTE: see REPORT_DRAFT.md Section 6 for the full bullet list
-% of corrections vs. the first submission's Discussion.
 
 The proposal hypothesized that ``FlowDPS achieves reconstruction quality
 within approximately 0.5--1.1\,dB PSNR of DPS while offering a substantial
