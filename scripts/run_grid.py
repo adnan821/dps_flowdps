@@ -135,6 +135,13 @@ def _resolve_method_config(method: str, args):
         else:
             raise ValueError(f"Unknown sched_kind: {args.sched_kind}")
         return ("pixel_dps", sched, {})
+    if method == "pixel_dps_sched_v2":
+        # σ_n-adaptive variant: use the original pixel_dps_sched winning
+        # config (ramp(80, 0.5)) when σ_n > 0, fall back to v1 scalar
+        # ζ=10 when σ_n = 0. The σ_n-dependent dispatch is done in main()
+        # because _resolve_method_config doesn't see (sb, sn). The
+        # placeholder zeta below is overwritten there per-cell.
+        return ("pixel_dps", "sn_adaptive_placeholder", {"_sn_adaptive_sched": True})
     if method == "flowdps_rf_heun":
         # FlowDPS-on-RF v2 config (EMA + ramp(200, 0.5)) with a 2nd-order
         # Heun integrator. Same guidance as v2 — isolates the integrator.
@@ -146,6 +153,15 @@ def _resolve_method_config(method: str, args):
         # drops below P/2. zeta is unused (no gradient term). The CSV
         # `zeta` column gets the particle count for resume-key uniqueness.
         return ("particle_dps", f"P={args.num_particles}", {})
+    if method == "pixel_dps_spectral":
+        # Tier-B on matched-Gaussian main grid: spectral noise-floor weight
+        # built from the SAME Gaussian OTF the sampler assumes (matched
+        # condition). The weight resolves per cell in main() because the
+        # OTF depends on σ_b.
+        return ("pixel_dps", args.zeta_pixel_dps, {"_spectral": True})
+    if method == "flowdps_rf_spectral":
+        # Same on FlowDPS-RF.
+        return ("flowdps_rf", args.zeta_flowdps_rf, {"_spectral": True})
     if method == "flowdps_rf_pigdm_pure":
         # Fix #1: analytical Π-GDM (Song 2023) on RF. No free ζ — the
         # gradient magnitude is derived from the Tweedie covariance
@@ -205,15 +221,31 @@ def main(args):
 
     for method, sb, sn, nfe in itertools.product(methods, sigma_blurs, sigma_noises, nfes):
         sampler_kind, zeta, extra_kwargs = _resolve_method_config(method, args)
+        # Per-cell ζ dispatch for σ_n-adaptive methods.
+        if extra_kwargs.pop("_sn_adaptive_sched", False):
+            if sn == 0.0:
+                zeta = args.zeta_pixel_dps   # v1 scalar = 10
+            else:
+                zeta = zeta_ramp(args.sched_zeta0, args.sched_alpha)
         zeta_str = _zeta_stringify(zeta)
         # If this method is Tier-C (pigdm), resolve the per-cell OTF + sigma_n.
         use_pigdm = extra_kwargs.pop("_pigdm", False)
         use_pigdm_pure = extra_kwargs.pop("_pigdm_pure", False)
+        use_spectral = extra_kwargs.pop("_spectral", False)
         integrator = extra_kwargs.pop("_integrator", None)
         tempering_max = extra_kwargs.pop("_tempering_max", None)
         tempering_alpha = extra_kwargs.pop("_tempering_alpha", None)
         force_resample = extra_kwargs.pop("_force_resample", None)
         sample_kwargs: dict = {}
+        if use_spectral:
+            # Tier-B on matched grid: build the noise-floor weight from
+            # the actual σ_b's OTF (true == assumed under matched config).
+            from src.samplers.spectral_weight import noise_floor_weight
+            if sb not in otf_cache:
+                otf_cache[sb] = gaussian_otf(sb, (256, 256), device=device)
+            sample_kwargs["spectral_weight"] = noise_floor_weight(
+                otf_cache[sb], eps=args.spectral_eps, alpha=args.spectral_alpha,
+            )
         if use_pigdm:
             if sb not in otf_cache:
                 otf_cache[sb] = gaussian_otf(sb, (256, 256), device=device)
@@ -354,6 +386,10 @@ if __name__ == "__main__":
                    help="Exponent for the pixel_dps_sched schedule.")
     p.add_argument("--num_particles", type=int, default=8,
                    help="Particle count for the gradient-free particle_dps sampler.")
+    p.add_argument("--spectral_eps", type=float, default=0.10,
+                   help="Tier-B noise-floor threshold (matches run_robustness.py default).")
+    p.add_argument("--spectral_alpha", type=float, default=10.0,
+                   help="Tier-B noise-floor steepness (matches run_robustness.py default).")
     p.add_argument("--tempering_max", type=float, default=10.0,
                    help="SMC tempering: σ_y_eff starts at σ_y·T_max at step 0 and "
                         "decays to σ_y at the final step. T_max=1 disables tempering.")

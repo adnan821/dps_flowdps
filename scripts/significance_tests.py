@@ -50,7 +50,8 @@ def main(args):
     # Load both CSVs. Method allowlist auto-extended for tier A/B/C variants.
     diffusion_family = {
         "pixel_dps", "pixel_dps_v2", "pixel_dps_spectral", "pixel_dps_pigdm",
-        "pixel_dps_sched", "particle_dps", "particle_dps_tempered",
+        "pixel_dps_sched", "pixel_dps_sched_v2", "particle_dps",
+        "particle_dps_tempered",
         "flowdps_rf", "flowdps_rf_v2", "flowdps_rf_spectral", "flowdps_rf_pigdm",
         "flowdps_rf_heun", "flowdps_rf_pigdm_pure",
     }
@@ -99,9 +100,13 @@ def main(args):
         # Tier A
         ("pixel_dps_v2",        100,   "pixel_dps",        100),
         ("flowdps_rf_v2",       100,   "flowdps_rf",       100),
-        # Tier B
+        # Tier B (NFE=50 entries below are the robustness-grid comparisons;
+        # NFE=100 entries are the matched-Gaussian main-grid run added
+        # 2026-05-27 to test "spectral helps when forward model is correct".)
         ("pixel_dps_spectral",  50,    "pixel_dps",        50),
         ("flowdps_rf_spectral", 50,    "flowdps_rf",       50),
+        ("pixel_dps_spectral",  100,   "pixel_dps",        100),
+        ("flowdps_rf_spectral", 100,   "flowdps_rf",       100),
         # Tier C
         ("pixel_dps_pigdm",     100,   "pixel_dps",        100),
         ("flowdps_rf_pigdm",    100,   "flowdps_rf",       100),
@@ -118,6 +123,9 @@ def main(args):
         # Fix #1: analytical Π-GDM (pure form, no free ζ) on FlowDPS-RF
         ("flowdps_rf_pigdm_pure",   100,   "flowdps_rf",     100),
         ("flowdps_rf_pigdm_pure",   100,   "flowdps_rf_v2",  100),
+        # σ_n-adaptive sched (σ_n=0 cells match v1 by construction; only
+        # σ_n=0.05 cells provide new signal).
+        ("pixel_dps_sched_v2",      100,   "pixel_dps",      100),
     ]
 
     sbs = [1.5, 3.0, 5.0]
