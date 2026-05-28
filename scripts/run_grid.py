@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.forward import degrade
 from src.forward.degradation import gaussian_blur, motion_blur
+from src.forward.ops_fft import gaussian_otf, motion_blur_otf
 from src.metrics.image_metrics import psnr, ssim, LPIPSMetric
 from src.metrics.results_logger import ResultsLogger
 from src.metrics.timing import CUDATimer
@@ -193,33 +194,52 @@ def main(args):
 
     # Resolve grid axes.
     methods = args.methods.split(",")
-    sigma_blurs = [float(x) for x in args.sigma_blurs.split(",")]
     sigma_noises = [float(x) for x in args.sigma_noises.split(",")]
     nfes = [int(x) for x in args.nfes.split(",")]
+    blur_type = args.blur_type
+    if blur_type == "gaussian":
+        sigma_blurs = [float(x) for x in args.sigma_blurs.split(",")]
+        blur_axes = [("gaussian", sb) for sb in sigma_blurs]
+    elif blur_type == "motion":
+        motion_lengths = [int(x) for x in args.motion_lengths.split(",")]
+        motion_angles = [float(x) for x in args.motion_angles.split(",")]
+        blur_axes = [("motion", L, theta) for L in motion_lengths for theta in motion_angles]
+    else:
+        raise ValueError(f"Unknown blur_type: {blur_type}")
 
     # Load test images.
     img_paths = sorted(Path(args.test_dir).glob("*.png"))[: args.num_images]
     print(f"Loading {len(img_paths)} test images from {args.test_dir}")
     images = [load_image(str(p)) for p in img_paths]
 
-    # CSV logger.
+    # CSV logger. Dedup key depends on blur_type so motion and Gaussian
+    # rows don't collide.
     logger = ResultsLogger(args.csv_path)
-    key_fields = ("method", "blur_type", "sigma_blur", "sigma_noise", "nfe", "zeta", "image_id")
+    if blur_type == "gaussian":
+        key_fields = ("method", "blur_type", "sigma_blur", "sigma_noise", "nfe", "zeta", "image_id")
+    else:
+        key_fields = ("method", "blur_type", "motion_length", "motion_angle", "sigma_noise", "nfe", "zeta", "image_id")
     already_done = logger.done_keys(key_fields)
     print(f"Resume-skip: {len(already_done)} rows already in {args.csv_path}")
 
     lpips = LPIPSMetric(device=device)
     samplers = {}
 
-    total_rows = len(methods) * len(sigma_blurs) * len(sigma_noises) * len(nfes) * len(images)
+    total_rows = len(methods) * len(blur_axes) * len(sigma_noises) * len(nfes) * len(images)
     done = 0
     t_start = time.time()
 
-    # Cache `gaussian_otf` per sigma_b so we don't rebuild it 50 times.
-    from src.forward.ops_fft import gaussian_otf
-    otf_cache: dict[float, torch.Tensor] = {}
+    # OTF cache keyed by blur-axis tuple so Gaussian and motion don't collide.
+    otf_cache: dict[tuple, torch.Tensor] = {}
 
-    for method, sb, sn, nfe in itertools.product(methods, sigma_blurs, sigma_noises, nfes):
+    for method, blur_params, sn, nfe in itertools.product(methods, blur_axes, sigma_noises, nfes):
+        # Unpack blur axis.
+        if blur_params[0] == "gaussian":
+            _, sb = blur_params
+            L = theta = None
+        else:
+            _, L, theta = blur_params
+            sb = None
         sampler_kind, zeta, extra_kwargs = _resolve_method_config(method, args)
         # Per-cell ζ dispatch for σ_n-adaptive methods.
         if extra_kwargs.pop("_sn_adaptive_sched", False):
@@ -237,26 +257,32 @@ def main(args):
         tempering_alpha = extra_kwargs.pop("_tempering_alpha", None)
         force_resample = extra_kwargs.pop("_force_resample", None)
         sample_kwargs: dict = {}
+
+        # Build the per-cell OTF if any spectral/pigdm method needs it.
+        # Matched config: assumed operator IS the true operator, so the
+        # OTF is built from the same params used in the measurement.
+        def _build_otf():
+            if blur_params[0] == "gaussian":
+                return gaussian_otf(sb, (256, 256), device=device)
+            else:
+                return motion_blur_otf(L, theta, (256, 256), device=device)
+
         if use_spectral:
-            # Tier-B on matched grid: build the noise-floor weight from
-            # the actual σ_b's OTF (true == assumed under matched config).
             from src.samplers.spectral_weight import noise_floor_weight
-            if sb not in otf_cache:
-                otf_cache[sb] = gaussian_otf(sb, (256, 256), device=device)
+            if blur_params not in otf_cache:
+                otf_cache[blur_params] = _build_otf()
             sample_kwargs["spectral_weight"] = noise_floor_weight(
-                otf_cache[sb], eps=args.spectral_eps, alpha=args.spectral_alpha,
+                otf_cache[blur_params], eps=args.spectral_eps, alpha=args.spectral_alpha,
             )
         if use_pigdm:
-            if sb not in otf_cache:
-                otf_cache[sb] = gaussian_otf(sb, (256, 256), device=device)
-            sample_kwargs["pigdm_otf"] = otf_cache[sb]
+            if blur_params not in otf_cache:
+                otf_cache[blur_params] = _build_otf()
+            sample_kwargs["pigdm_otf"] = otf_cache[blur_params]
             sample_kwargs["pigdm_sigma_n"] = max(sn, 1e-3)
         if use_pigdm_pure:
-            # The pigdm_pure samplers take H_otf + sigma_n as positional/
-            # named args (not pigdm_otf). Build the OTF once per σ_b.
-            if sb not in otf_cache:
-                otf_cache[sb] = gaussian_otf(sb, (256, 256), device=device)
-            sample_kwargs["H_otf"] = otf_cache[sb]
+            if blur_params not in otf_cache:
+                otf_cache[blur_params] = _build_otf()
+            sample_kwargs["H_otf"] = otf_cache[blur_params]
             sample_kwargs["sigma_n"] = sn   # the sampler floors internally at 0.01
         if integrator is not None:
             sample_kwargs["integrator"] = integrator
@@ -288,21 +314,32 @@ def main(args):
         is_pixel_dps_family = sampler_kind in ("pixel_dps", "particle_dps")
 
         for img_idx, x in enumerate(images):
-            key = (method, "gaussian", f"{sb}", f"{sn}", f"{nfe}", zeta_str, f"{img_idx}")
+            if blur_type == "gaussian":
+                key = (method, "gaussian", f"{sb}", f"{sn}", f"{nfe}", zeta_str, f"{img_idx}")
+            else:
+                key = (method, "motion", f"{L}", f"{theta}", f"{sn}", f"{nfe}", zeta_str, f"{img_idx}")
             if key in already_done:
                 done += 1
                 continue
 
             x_dev = x.unsqueeze(0).to(device)
 
-            # Forward op closure (Gaussian blur).
-            def forward_op(z, sb_=sb):
-                return gaussian_blur(z, sigma=sb_)
-
-            y = degrade(
-                x_dev, blur_type="gaussian",
-                blur_sigma=sb, noise_sigma=sn, seed=args.seed + img_idx,
-            )
+            # Forward op closure (matched to blur_type).
+            if blur_type == "gaussian":
+                def forward_op(z, sb_=sb):
+                    return gaussian_blur(z, sigma=sb_)
+                y = degrade(
+                    x_dev, blur_type="gaussian",
+                    blur_sigma=sb, noise_sigma=sn, seed=args.seed + img_idx,
+                )
+            else:
+                def forward_op(z, L_=L, theta_=theta):
+                    return motion_blur(z, length=L_, angle_deg=theta_)
+                y = degrade(
+                    x_dev, blur_type="motion",
+                    motion_length=L, motion_angle_deg=theta,
+                    noise_sigma=sn, seed=args.seed + img_idx,
+                )
 
             with CUDATimer() as timer:
                 if is_pixel_dps_family:
@@ -326,11 +363,11 @@ def main(args):
 
             logger.log({
                 "method": method,
-                "blur_type": "gaussian",
-                "sigma_blur": sb,
+                "blur_type": blur_type,
+                "sigma_blur": sb if blur_type == "gaussian" else "",
                 "sigma_noise": sn,
-                "motion_length": "",
-                "motion_angle": "",
+                "motion_length": L if blur_type == "motion" else "",
+                "motion_angle": theta if blur_type == "motion" else "",
                 "nfe": nfe,
                 "zeta": zeta_str,
                 "seed": args.seed + img_idx,
@@ -346,8 +383,9 @@ def main(args):
             done += 1
             elapsed = time.time() - t_start
             eta = elapsed / done * (total_rows - done) if done else float("inf")
+            cell_label = f"sb={sb}" if blur_type == "gaussian" else f"L={L},θ={theta}"
             print(
-                f"[{done:>5}/{total_rows}] {method} sb={sb} sn={sn} nfe={nfe} img={img_idx} "
+                f"[{done:>5}/{total_rows}] {method} {cell_label} sn={sn} nfe={nfe} img={img_idx} "
                 f"PSNR={p:.2f} SSIM={s:.3f} LPIPS={l:.3f} "
                 f"dt={timer.elapsed_s:.1f}s "
                 f"(elapsed {elapsed/60:.1f}m, ETA {eta/60:.1f}m)"
@@ -360,7 +398,15 @@ def main(args):
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--methods", default="pixel_dps,flowdps_rf")
-    p.add_argument("--sigma_blurs", default="1.5,3.0,5.0")
+    p.add_argument("--blur_type", default="gaussian", choices=["gaussian", "motion"],
+                   help="Forward-operator family. 'motion' enables matched motion deblurring "
+                        "(sampler's forward_op IS the motion-blur operator, not Gaussian).")
+    p.add_argument("--sigma_blurs", default="1.5,3.0,5.0",
+                   help="Used when --blur_type=gaussian.")
+    p.add_argument("--motion_lengths", default="15,25,35",
+                   help="Used when --blur_type=motion. Length in pixels of the motion kernel.")
+    p.add_argument("--motion_angles", default="0,45",
+                   help="Used when --blur_type=motion. Angle in degrees of the motion kernel.")
     p.add_argument("--sigma_noises", default="0.0,0.05")
     p.add_argument("--nfes", default="25,50,100")
     p.add_argument("--zeta_pixel_dps", type=float, default=10.0)
