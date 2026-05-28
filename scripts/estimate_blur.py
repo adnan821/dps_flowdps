@@ -18,6 +18,23 @@ This is robust by construction: we're matching the spectral signature
 to one we KNOW how to generate from the same pipeline. The estimate is
 guaranteed to be a valid pool cell.
 
+Empirical reliability (smoke test on one CelebA-HQ face, sigma_n=0.05):
+
+    Truth                  Estimate                        Type
+    gaussian sigma=1.5  -> gaussian sigma=3.0 (1 step off)  ok
+    gaussian sigma=3.0  -> gaussian sigma=5.0 (1 step off)  ok
+    gaussian sigma=5.0  -> gaussian sigma=5.0 (exact)       ok
+    motion L=15, th=0   -> gaussian sigma=5.0               FAIL
+    motion L=25, th=45  -> motion L=35, th=45 (2 steps off) ok
+    motion L=35, th=45  -> motion L=35, th=45 (exact)       ok
+  sigma_n: exact on all six cases.
+
+  So sigma_n estimation is reliable, Gaussian sigma_b is correct within
+  +-1 pool step, motion blur is detected reliably for L>=25 or non-axis-
+  aligned angles, but short-length axis-aligned motion (L=15, theta=0)
+  is misclassified as Gaussian. For unknown photos, treat the result as
+  a starting guess and verify by eye against the deblurred output.
+
 Caveats:
   - Faces from a similar distribution to CelebA-HQ are needed for the
     calibration images. Default uses 5 test images, which is enough.
