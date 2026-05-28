@@ -135,6 +135,11 @@ def main():
                         "direct: the input is already blurred; just deblur.")
     p.add_argument("--reference", default=None,
                    help="Optional clean reference path for --mode direct, to enable PSNR/SSIM/LPIPS.")
+    p.add_argument("--blur_metadata", default=None,
+                   help="Path to a blurry.json sidecar written by scripts/blur_image.py. "
+                        "If set, overrides --blur_type / --sigma_b / --motion_* / --sigma_n. "
+                        "Also implies --mode direct (the input is the already-blurred y) and "
+                        "auto-sets --reference to the original clean image if available.")
     p.add_argument("--blur_type", default="gaussian", choices=["gaussian", "motion"])
     p.add_argument("--sigma_b", type=float, default=3.0,
                    help="Gaussian blur std (in pixels). Used when --blur_type=gaussian.")
@@ -155,6 +160,27 @@ def main():
                    help="Where to write {clean,measurement,reconstruction_<method>}.png")
     p.add_argument("--seed", type=int, default=0)
     args = p.parse_args()
+
+    # If a sidecar JSON is provided, load its params and override the CLI defaults.
+    if args.blur_metadata:
+        import json
+        meta = json.loads(Path(args.blur_metadata).read_text())
+        args.blur_type = meta["blur_type"]
+        args.sigma_b = meta.get("sigma_b") or args.sigma_b
+        args.motion_length = meta.get("motion_length") or args.motion_length
+        args.motion_angle = meta.get("motion_angle") or args.motion_angle
+        args.sigma_n = meta["sigma_n"]
+        args.mode = "direct"
+        if args.reference is None and meta.get("clean_input"):
+            ref_path = Path(meta["clean_input"])
+            if ref_path.exists():
+                args.reference = str(ref_path)
+        print(f"[meta] loaded params from {args.blur_metadata}: "
+              f"blur_type={args.blur_type}, "
+              f"sigma_b={args.sigma_b}, "
+              f"motion=({args.motion_length}, {args.motion_angle}), "
+              f"sigma_n={args.sigma_n}, "
+              f"reference={args.reference}")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
