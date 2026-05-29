@@ -501,6 +501,84 @@ is in the supplementary material.
     proposal's hypothesized flow-speed advantage.
 \end{enumerate}
 
+\subsection{Matched motion deblurring}\label{sec:matched_motion}
+
+The matched-Gaussian grid in \S\ref{sec:results} fixes one forward-
+operator family. As a second matched-condition family — and to
+directly address the limitation that the headline DPS-vs-FlowDPS-RF
+comparison rests on a single operator — we re-ran the same Pixel-DPS
+and FlowDPS-on-RF samplers with their \emph{matched} forward
+operator set to motion blur instead of Gaussian. The sampler's
+$A(\cdot)$ now is $\text{motion}(L, \theta)$ with $L \in \{15, 25, 35\}$
+pixels and $\theta \in \{0^\circ, 45^\circ\}$, $\sigma_n \in
+\{0.0, 0.05\}$, NFE${=}100$, $n{=}50$ images per cell. The
+measurement $y$ is generated with the same motion-blur operator
+the sampler assumes, so this is a clean matched-operator comparison
+parallel to the matched-Gaussian grid.
+
+\begin{table}[h]
+  \centering
+  \caption{Matched motion deblurring: Pixel-DPS vs FlowDPS-on-RF on
+    12 (\,$L$,$\theta$,$\sigma_n$\,) cells at NFE${=}100$, $n{=}50$
+    images per cell. Bonferroni-corrected $p$-values across the 12
+    cells. \emph{All 12 cells are positive-and-significant in
+    Pixel-DPS's favor}, with Cohen's $d$ ranging from $2.53$ to
+    $3.48$ (very-large effect throughout).}
+  \label{tab:matched_motion}
+  \begin{tabular}{lrrrrrr}
+    \toprule
+    Cell ($L, \theta^\circ, \sigma_n$) & Pixel-DPS & FlowDPS-RF & $\Delta$ (dB) & $p$ (Bonferroni) & Cohen's $d$ \\
+    \midrule
+    (15,\,0,\,0.00)  & 27.88 & 24.48 & $+3.41$ & $4.7 \times 10^{-22}$ & 2.53 \\
+    (15,\,0,\,0.05)  & 25.83 & 22.54 & $+3.29$ & $1.8 \times 10^{-25}$ & 3.03 \\
+    (15,\,45,\,0.00) & 27.82 & 24.48 & $+3.34$ & $1.7 \times 10^{-22}$ & 2.59 \\
+    (15,\,45,\,0.05) & 25.73 & 22.54 & $+3.19$ & $4.3 \times 10^{-24}$ & 2.82 \\
+    (25,\,0,\,0.00)  & 27.00 & 22.88 & $+4.12$ & $1.2 \times 10^{-23}$ & 2.76 \\
+    (25,\,0,\,0.05)  & 25.34 & 21.35 & $+3.99$ & $5.3 \times 10^{-27}$ & 3.28 \\
+    (25,\,45,\,0.00) & 27.06 & 22.92 & $+4.14$ & $2.3 \times 10^{-23}$ & 2.72 \\
+    (25,\,45,\,0.05) & 25.38 & 21.35 & $+4.02$ & $1.1 \times 10^{-26}$ & 3.23 \\
+    (35,\,0,\,0.00)  & 26.39 & 21.80 & $+4.59$ & $4.9 \times 10^{-25}$ & 2.96 \\
+    (35,\,0,\,0.05)  & 24.79 & 20.42 & $+4.37$ & $3.8 \times 10^{-28}$ & 3.48 \\
+    (35,\,45,\,0.00) & 26.47 & 21.89 & $+4.58$ & $5.7 \times 10^{-25}$ & 2.95 \\
+    (35,\,45,\,0.05) & 24.79 & 20.46 & $+4.34$ & $6.7 \times 10^{-27}$ & 3.26 \\
+    \midrule
+    \textbf{Mean}    &       &       & $\boldsymbol{+3.95}$ & --- & --- \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\paragraph{Headline findings (matched motion).}
+\begin{enumerate}[leftmargin=*,itemsep=2pt]
+  \item \textbf{Pixel-DPS dominates FlowDPS-on-RF on matched motion
+    blur, in every cell.} Mean $\Delta{=}+3.95$\,dB across the 12
+    cells, slightly \emph{wider} than the matched-Gaussian gap
+    (mean $+3.24$\,dB). The DPS-vs-FlowDPS-RF ordering established
+    in \S\ref{sec:results} is therefore not specific to Gaussian
+    blur; it holds on a second forward-operator family with at
+    least as large effect sizes. This addresses the
+    single-operator-family limitation noted in \S\ref{sec:discussion}.
+  \item \textbf{Motion direction barely matters for either sampler.}
+    The $\theta{=}0^\circ$ and $\theta{=}45^\circ$ cells differ by
+    $\leq 0.1$\,dB at any given $(L, \sigma_n)$ for both methods.
+    Neither sampler has a preferred motion orientation; both are
+    rotationally near-equivariant in their reconstruction quality.
+  \item \textbf{Both samplers degrade monotonically with $L$.}
+    Pixel-DPS drops from $27.85$\,dB at $L{=}15$ to $26.43$\,dB at
+    $L{=}35$ ($-1.4$\,dB); FlowDPS-RF drops from $24.48$ to $21.85$
+    ($-2.6$\,dB). Longer motion blurs are harder for both, but
+    FlowDPS-RF degrades roughly $2\times$ faster — consistent with
+    its FM-saturation diagnosis (\S\ref{sec:results}): the
+    saturated late-step guidance has less room to push the
+    sampler through harder operators.
+  \item \textbf{FlowDPS-RF's matched-motion PSNRs (20.4--24.5\,dB)
+    are in the same range as its matched-Gaussian-$\sigma_b{=}5$
+    PSNRs (21.1\,dB).} Matched-motion deblurring is roughly as hard
+    as the hardest matched-Gaussian cell for the flow-based
+    sampler. Pixel-DPS is more graceful: its hardest matched-motion
+    cell ($24.79$\,dB) is comparable to its hardest matched-Gaussian
+    ($25.33$\,dB).
+\end{enumerate}
+
 \subsection{Operator-mismatch robustness study}\label{sec:robustness}
 
 The robustness study follows the spirit of common-corruption
@@ -1207,7 +1285,10 @@ $n{=}100$ boost on the FlowDPS-RF spectral matched-grid comparison to
 confirm an effect already statistically positive at $n{=}50$ in the
 borderline cells. Error bars are reported as $\pm\sigma$ in the
 supplementary tables. (ii)~Single dataset (CelebA-HQ-256 faces).
-(iii)~Single forward-operator family per study (Gaussian / motion blur).
+(iii)~Two forward-operator families on the main matched comparison
+(Gaussian, \S\ref{sec:results}; motion, \S\ref{sec:matched_motion}).
+Both yield the same DPS-vs-FlowDPS-RF ordering; we have not tested
+broader operator classes (e.g.\ super-resolution, inpainting).
 (iv)~Our DDRM reimplementation did not reach competitive PSNR in the
 available time (it collapsed to $\sim$14\,dB even at the easiest cell);
 we report DnCNN$+$PnP-ADMM as the analogous classical-prior reference
