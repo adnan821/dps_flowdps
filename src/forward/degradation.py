@@ -98,6 +98,28 @@ def motion_blur(
     return _apply_kernel(x, kernel)
 
 
+def sr_bicubic(
+    x: torch.Tensor,
+    factor: int,
+) -> torch.Tensor:
+    """Bicubic downsampling super-resolution forward operator.
+
+    Maps a high-res image x of shape (B, C, H, W) to its low-res
+    measurement y of shape (B, C, H/factor, W/factor) via bilinear
+    pre-filter (Gaussian sigma ~ factor/2 anti-aliasing) followed by
+    bicubic interpolation. Differentiable so DPS likelihood gradient
+    backpropagates through. The sampler's reconstruction lives in the
+    original (H, W) image space; only the measurement y is low-res.
+    """
+    import torch.nn.functional as F
+    # Anti-aliasing blur (sigma scales with the downsample ratio).
+    anti_alias = gaussian_blur(x, sigma=max(0.5, factor / 2.0))
+    return F.interpolate(
+        anti_alias, scale_factor=1.0 / float(factor),
+        mode="bicubic", align_corners=False, antialias=False,
+    )
+
+
 def add_noise(
     y: torch.Tensor,
     sigma: float,
@@ -115,6 +137,7 @@ def degrade(
     blur_sigma: float = 3.0,
     motion_length: int = 21,
     motion_angle_deg: float = 45.0,
+    sr_factor: int = 4,
     noise_sigma: float = 0.05,
     seed: Optional[int] = None,
 ) -> torch.Tensor:
@@ -127,6 +150,8 @@ def degrade(
         y = gaussian_blur(x, blur_sigma)
     elif blur_type == "motion":
         y = motion_blur(x, motion_length, motion_angle_deg)
+    elif blur_type == "sr":
+        y = sr_bicubic(x, sr_factor)
     elif blur_type == "identity":
         y = x
     else:

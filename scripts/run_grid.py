@@ -20,7 +20,7 @@ from PIL import Image
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.forward import degrade
-from src.forward.degradation import gaussian_blur, motion_blur
+from src.forward.degradation import gaussian_blur, motion_blur, sr_bicubic
 from src.forward.ops_fft import gaussian_otf, motion_blur_otf
 from src.metrics.image_metrics import psnr, ssim, LPIPSMetric
 from src.metrics.results_logger import ResultsLogger
@@ -204,6 +204,9 @@ def main(args):
         motion_lengths = [int(x) for x in args.motion_lengths.split(",")]
         motion_angles = [float(x) for x in args.motion_angles.split(",")]
         blur_axes = [("motion", L, theta) for L in motion_lengths for theta in motion_angles]
+    elif blur_type == "sr":
+        sr_factors = [int(x) for x in args.sr_factors.split(",")]
+        blur_axes = [("sr", r) for r in sr_factors]
     else:
         raise ValueError(f"Unknown blur_type: {blur_type}")
 
@@ -216,6 +219,8 @@ def main(args):
     # rows don't collide.
     logger = ResultsLogger(args.csv_path)
     if blur_type == "gaussian":
+        key_fields = ("method", "blur_type", "sigma_blur", "sigma_noise", "nfe", "zeta", "image_id")
+    elif blur_type == "sr":
         key_fields = ("method", "blur_type", "sigma_blur", "sigma_noise", "nfe", "zeta", "image_id")
     else:
         key_fields = ("method", "blur_type", "motion_length", "motion_angle", "sigma_noise", "nfe", "zeta", "image_id")
@@ -236,10 +241,13 @@ def main(args):
         # Unpack blur axis.
         if blur_params[0] == "gaussian":
             _, sb = blur_params
-            L = theta = None
+            L = theta = sr_factor = None
+        elif blur_params[0] == "sr":
+            _, sr_factor = blur_params
+            sb = L = theta = None
         else:
             _, L, theta = blur_params
-            sb = None
+            sb = sr_factor = None
         sampler_kind, zeta, extra_kwargs = _resolve_method_config(method, args)
         # Per-cell ζ dispatch for σ_n-adaptive methods.
         if extra_kwargs.pop("_sn_adaptive_sched", False):
@@ -316,6 +324,8 @@ def main(args):
         for img_idx, x in enumerate(images):
             if blur_type == "gaussian":
                 key = (method, "gaussian", f"{sb}", f"{sn}", f"{nfe}", zeta_str, f"{img_idx}")
+            elif blur_type == "sr":
+                key = (method, "sr", f"{sr_factor}", f"{sn}", f"{nfe}", zeta_str, f"{img_idx}")
             else:
                 key = (method, "motion", f"{L}", f"{theta}", f"{sn}", f"{nfe}", zeta_str, f"{img_idx}")
             if key in already_done:
@@ -332,6 +342,14 @@ def main(args):
                     x_dev, blur_type="gaussian",
                     blur_sigma=sb, noise_sigma=sn, seed=args.seed + img_idx,
                 )
+            elif blur_type == "sr":
+                def forward_op(z, r=sr_factor):
+                    return sr_bicubic(z, factor=r)
+                y = degrade(
+                    x_dev, blur_type="sr",
+                    sr_factor=sr_factor, noise_sigma=sn,
+                    seed=args.seed + img_idx,
+                )
             else:
                 def forward_op(z, L_=L, theta_=theta):
                     return motion_blur(z, length=L_, angle_deg=theta_)
@@ -340,6 +358,11 @@ def main(args):
                     motion_length=L, motion_angle_deg=theta,
                     noise_sigma=sn, seed=args.seed + img_idx,
                 )
+
+            # For SR, the sampler must initialize x at the model's native
+            # spatial shape (= the clean image shape), not at y's shape.
+            if blur_type == "sr":
+                sample_kwargs["out_shape"] = tuple(x_dev.shape)
 
             with CUDATimer() as timer:
                 if is_pixel_dps_family:
@@ -364,7 +387,7 @@ def main(args):
             logger.log({
                 "method": method,
                 "blur_type": blur_type,
-                "sigma_blur": sb if blur_type == "gaussian" else "",
+                "sigma_blur": sb if blur_type == "gaussian" else (sr_factor if blur_type == "sr" else ""),
                 "sigma_noise": sn,
                 "motion_length": L if blur_type == "motion" else "",
                 "motion_angle": theta if blur_type == "motion" else "",
@@ -383,7 +406,11 @@ def main(args):
             done += 1
             elapsed = time.time() - t_start
             eta = elapsed / done * (total_rows - done) if done else float("inf")
-            cell_label = f"sb={sb}" if blur_type == "gaussian" else f"L={L},θ={theta}"
+            cell_label = (
+                f"sb={sb}" if blur_type == "gaussian" else
+                f"r={sr_factor}" if blur_type == "sr" else
+                f"L={L},θ={theta}"
+            )
             print(
                 f"[{done:>5}/{total_rows}] {method} {cell_label} sn={sn} nfe={nfe} img={img_idx} "
                 f"PSNR={p:.2f} SSIM={s:.3f} LPIPS={l:.3f} "
@@ -398,15 +425,18 @@ def main(args):
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--methods", default="pixel_dps,flowdps_rf")
-    p.add_argument("--blur_type", default="gaussian", choices=["gaussian", "motion"],
+    p.add_argument("--blur_type", default="gaussian", choices=["gaussian", "motion", "sr"],
                    help="Forward-operator family. 'motion' enables matched motion deblurring "
-                        "(sampler's forward_op IS the motion-blur operator, not Gaussian).")
+                        "(sampler's forward_op IS the motion-blur operator, not Gaussian). "
+                        "'sr' enables matched super-resolution (bicubic downsample by --sr_factors).")
     p.add_argument("--sigma_blurs", default="1.5,3.0,5.0",
                    help="Used when --blur_type=gaussian.")
     p.add_argument("--motion_lengths", default="15,25,35",
                    help="Used when --blur_type=motion. Length in pixels of the motion kernel.")
     p.add_argument("--motion_angles", default="0,45",
                    help="Used when --blur_type=motion. Angle in degrees of the motion kernel.")
+    p.add_argument("--sr_factors", default="2,4,8",
+                   help="Used when --blur_type=sr. Downsampling factors.")
     p.add_argument("--sigma_noises", default="0.0,0.05")
     p.add_argument("--nfes", default="25,50,100")
     p.add_argument("--zeta_pixel_dps", type=float, default=10.0)

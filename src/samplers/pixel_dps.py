@@ -77,6 +77,7 @@ class PixelDPS:
         spectral_weight: Optional[torch.Tensor] = None,
         pigdm_otf: Optional[torch.Tensor] = None,
         pigdm_sigma_n: Optional[float] = None,
+        out_shape: Optional[tuple] = None,
     ) -> DPSResult:
         """Run DPS to recover `x` from a measurement `y = A(x) + noise`.
 
@@ -106,10 +107,14 @@ class PixelDPS:
         y = y.to(self.device)
 
         # Initialize x_T ~ N(0, I) in [-1, 1] space (standard DDPM initial).
+        # For inverse problems where A changes spatial dims (e.g., super-
+        # resolution), the caller passes out_shape so x_T has the model's
+        # native input shape rather than y's shape.
         gen = None
         if seed is not None:
             gen = torch.Generator(device=self.device).manual_seed(int(seed))
-        x = torch.randn(y.shape, generator=gen, device=self.device, dtype=torch.float32)
+        x_shape = out_shape if out_shape is not None else y.shape
+        x = torch.randn(x_shape, generator=gen, device=self.device, dtype=torch.float32)
 
         # Set up the reverse schedule.
         self.scheduler.set_timesteps(num_steps, device=self.device)

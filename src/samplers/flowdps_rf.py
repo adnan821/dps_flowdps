@@ -59,6 +59,7 @@ class FlowDPSRF:
         pigdm_otf: Optional[torch.Tensor] = None,
         pigdm_sigma_n: float = 0.05,
         integrator: str = "euler",
+        out_shape: Optional[tuple] = None,
     ) -> FlowDPSResult:
         """Sample x ~ p(x | y) with FlowDPS-on-RF.
 
@@ -93,14 +94,18 @@ class FlowDPSRF:
             raise ValueError(f"Unknown integrator: {integrator}")
         import time
 
-        B, C, H, W = y.shape
+        # For inverse problems where A changes spatial dims (e.g., super-
+        # resolution), the caller passes out_shape so x_T has the model's
+        # native input shape rather than y's shape.
+        x_shape = out_shape if out_shape is not None else y.shape
+        B, C, H, W = x_shape
         y = y.to(self.device)
 
         gen = None
         if seed is not None:
             gen = torch.Generator(device=self.device).manual_seed(int(seed))
         # Initial state: pure noise (this is z_0 ~ N(0, I)).
-        x = torch.randn((B, C, H, W), generator=gen, device=self.device, dtype=torch.float32)
+        x = torch.randn(x_shape, generator=gen, device=self.device, dtype=torch.float32)
 
         T = 1.0
         # Heun spends 2 velocity calls per step; halve the step count so
