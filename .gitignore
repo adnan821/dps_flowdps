@@ -17,6 +17,11 @@ docs/tmp/
 # Local-only project notes (kept off GitHub)
 .local/
 
+# Submission materials and authoring docs kept off GitHub
+docs/
+template/
+submission/
+
 # LaTeX build artifacts
 docs/*.aux
 docs/*.log
