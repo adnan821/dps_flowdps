@@ -62,6 +62,10 @@ RANDOM_POOLS = {
         "motion_angle": [0.0, 45.0],
         "sigma_n": [0.0, 0.05],
     },
+    "sr": {
+        "sr_factor": [2, 4, 8],
+        "sigma_n": [0.0, 0.05],
+    },
 }
 
 
@@ -84,7 +88,7 @@ def save_image(tensor: torch.Tensor, path: Path) -> None:
 def randomize_params(rng: random.Random, blur_type: str | None) -> dict:
     """Draw blur params uniformly from the project's main-grid pools."""
     if blur_type is None:
-        blur_type = rng.choice(["gaussian", "motion"])
+        blur_type = rng.choice(["gaussian", "motion", "sr"])
     pool = RANDOM_POOLS[blur_type]
     if blur_type == "gaussian":
         return {
@@ -92,13 +96,24 @@ def randomize_params(rng: random.Random, blur_type: str | None) -> dict:
             "sigma_b": rng.choice(pool["sigma_b"]),
             "motion_length": None,
             "motion_angle": None,
+            "sr_factor": None,
+            "sigma_n": rng.choice(pool["sigma_n"]),
+        }
+    if blur_type == "motion":
+        return {
+            "blur_type": "motion",
+            "sigma_b": None,
+            "motion_length": rng.choice(pool["motion_length"]),
+            "motion_angle": rng.choice(pool["motion_angle"]),
+            "sr_factor": None,
             "sigma_n": rng.choice(pool["sigma_n"]),
         }
     return {
-        "blur_type": "motion",
+        "blur_type": "sr",
         "sigma_b": None,
-        "motion_length": rng.choice(pool["motion_length"]),
-        "motion_angle": rng.choice(pool["motion_angle"]),
+        "motion_length": None,
+        "motion_angle": None,
+        "sr_factor": rng.choice(pool["sr_factor"]),
         "sigma_n": rng.choice(pool["sigma_n"]),
     }
 
@@ -112,15 +127,17 @@ def main():
     p.add_argument("--randomize", action="store_true",
                    help="Pick blur params uniformly from the project's main-grid "
                         "pools instead of using the explicit flags below.")
-    p.add_argument("--blur_type", default=None, choices=["gaussian", "motion"],
+    p.add_argument("--blur_type", default=None, choices=["gaussian", "motion", "sr"],
                    help="If --randomize is set, restrict the random draw to this "
-                        "blur family. Otherwise selects the operator family.")
+                        "operator family. Otherwise selects the operator family.")
     p.add_argument("--sigma_b", type=float, default=3.0,
                    help="Gaussian blur std in pixels (used when --blur_type=gaussian).")
     p.add_argument("--motion_length", type=int, default=25,
                    help="Motion-blur kernel length in pixels.")
     p.add_argument("--motion_angle", type=float, default=45.0,
                    help="Motion-blur angle in degrees.")
+    p.add_argument("--sr_factor", type=int, default=4,
+                   help="Super-resolution downsampling factor (used when --blur_type=sr).")
     p.add_argument("--sigma_n", type=float, default=0.05,
                    help="Measurement noise std in [0,1] image units.")
     p.add_argument("--seed", type=int, default=0,
@@ -148,6 +165,7 @@ def main():
             "sigma_b": args.sigma_b if blur_type == "gaussian" else None,
             "motion_length": args.motion_length if blur_type == "motion" else None,
             "motion_angle": args.motion_angle if blur_type == "motion" else None,
+            "sr_factor": args.sr_factor if blur_type == "sr" else None,
             "sigma_n": args.sigma_n,
         }
         print(f"[2] Explicit params: {chosen}")
@@ -160,11 +178,17 @@ def main():
             blur_sigma=chosen["sigma_b"],
             noise_sigma=chosen["sigma_n"], seed=args.seed,
         )
-    else:
+    elif chosen["blur_type"] == "motion":
         y = degrade(
             clean_b, blur_type="motion",
             motion_length=chosen["motion_length"],
             motion_angle_deg=chosen["motion_angle"],
+            noise_sigma=chosen["sigma_n"], seed=args.seed,
+        )
+    else:  # sr
+        y = degrade(
+            clean_b, blur_type="sr",
+            sr_factor=chosen["sr_factor"],
             noise_sigma=chosen["sigma_n"], seed=args.seed,
         )
     save_image(y, out_dir / "blurry.png")
@@ -178,6 +202,7 @@ def main():
         "sigma_b": chosen["sigma_b"],
         "motion_length": chosen["motion_length"],
         "motion_angle": chosen["motion_angle"],
+        "sr_factor": chosen.get("sr_factor"),
         "sigma_n": chosen["sigma_n"],
         "seed": args.seed,
         "resolution": 256,

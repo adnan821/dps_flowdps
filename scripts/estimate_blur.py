@@ -74,6 +74,7 @@ from src.forward.degradation import degrade
 SIGMA_B_POOL = [1.5, 3.0, 5.0]
 MOTION_LENGTH_POOL = [15, 25, 35]
 MOTION_ANGLE_POOL = [0.0, 45.0]
+SR_FACTOR_POOL = [2, 4, 8]
 SIGMA_N_POOL = [0.0, 0.05]
 
 
@@ -175,6 +176,23 @@ def build_reference_signatures(
             profs.append(_feature(y, n_sectors, feature_band))
         refs[("motion", L, theta, sn)] = np.stack(profs).mean(0)
 
+    s_cells = list(itertools.product(SR_FACTOR_POOL, SIGMA_N_POOL))
+    print(f"[calibrate] Building references for {len(s_cells)} SR cells")
+    import torch.nn.functional as F
+    for sf, sn in s_cells:
+        profs = []
+        for x in cleans:
+            # Generate the low-res measurement, then bicubic-upsample it
+            # back to 256x256 so the feature space is comparable to
+            # blur references. This matches what we do at inference time
+            # (load_image_tensor resizes any input back to 256x256).
+            y_low = degrade(x, blur_type="sr", sr_factor=sf,
+                            noise_sigma=sn, seed=0)
+            y = F.interpolate(y_low, size=(256, 256),
+                              mode="bicubic", align_corners=False)
+            profs.append(_feature(y, n_sectors, feature_band))
+        refs[("sr", sf, sn)] = np.stack(profs).mean(0)
+
     if verbose:
         print(f"[calibrate] Done — {len(refs)} reference signatures built")
     return refs
@@ -243,17 +261,23 @@ def main():
     if best_key[0] == "gaussian":
         _, sigma_b, sigma_n = best_key
         blur_type = "gaussian"
-        motion_length = motion_angle = None
-    else:
+        motion_length = motion_angle = sr_factor = None
+    elif best_key[0] == "motion":
         _, motion_length, motion_angle, sigma_n = best_key
         blur_type = "motion"
-        sigma_b = None
+        sigma_b = sr_factor = None
+    else:  # sr
+        _, sr_factor, sigma_n = best_key
+        blur_type = "sr"
+        sigma_b = motion_length = motion_angle = None
 
     if blur_type == "gaussian":
         print(f"\n[3] Estimate: gaussian, sigma_b={sigma_b}, sigma_n={sigma_n}")
-    else:
+    elif blur_type == "motion":
         print(f"\n[3] Estimate: motion, length={motion_length}, "
               f"angle={motion_angle} deg, sigma_n={sigma_n}")
+    else:
+        print(f"\n[3] Estimate: sr, factor={sr_factor}, sigma_n={sigma_n}")
 
     if confidence_ratio < 0.05:
         print(f"    WARNING: low confidence (margin tiny). The estimate "
@@ -267,6 +291,7 @@ def main():
         "sigma_b": sigma_b,
         "motion_length": motion_length,
         "motion_angle": motion_angle,
+        "sr_factor": sr_factor,
         "sigma_n": float(sigma_n),
         "seed": 0,
         "resolution": 256,
