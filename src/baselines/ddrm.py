@@ -113,8 +113,10 @@ class DDRM:
         # Tikhonov regularization λ. Smaller = trust measurement more;
         # larger = trust prior more. eta in [0,1] interpolates:
         # eta=0 → λ=0 (pure pseudo-inverse), eta=1 → λ=∞ (pure prior).
-        # We use λ = max(σ_n², 1e-4) scaled by (1-η)/η-ish heuristic.
-        lam_base = max(sigma_noise ** 2, 1e-4)
+        # Floor at 0.005 to prevent noise amplification at σ_n=0 cells
+        # where the Tikhonov denominator (|H|² + λ) would otherwise → 0
+        # at high frequencies and blow up the inversion.
+        lam_base = max(sigma_noise ** 2, 5e-3)
         lam = lam_base * (eta / max(1 - eta, 1e-3))
 
         timesteps = list(self.scheduler.timesteps)
