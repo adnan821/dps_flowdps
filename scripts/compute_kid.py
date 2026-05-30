@@ -199,6 +199,11 @@ def main():
         dt = time.time() - t0
         print(f"  produced {len(r)} reconstructions in {dt/60:.1f} min")
         recon_by_method[method] = r
+        # Defensive: save tensor immediately so a later failure doesn't
+        # lose this method's reconstructions.
+        save_path = Path(args.csv_path).parent / f"kid_recons_{method}.pt"
+        torch.save(r, save_path)
+        print(f"  saved {save_path}")
 
     print(f"\n[3] Computing KID for {len(recon_by_method)} methods.")
     kid_rows = []
