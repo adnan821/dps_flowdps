@@ -97,6 +97,7 @@ def run_one_operator(
     out_dir: Path,
     device: torch.device,
     lpips,
+    sampler_seed: int = 0,
 ):
     """Generate measurement for one operator + reconstruct with each method.
 
@@ -151,13 +152,13 @@ def run_one_operator(
             res = sampler.sample(
                 y=y, forward_op=fop,
                 num_steps=nfe, zeta=zeta, sigma_y=max(sigma_n, 1e-3),
-                seed=0, verbose=False, **sample_kwargs,
+                seed=sampler_seed, verbose=False, **sample_kwargs,
             )
         else:  # flowdps_rf
             res = sampler.sample(
                 y=y, forward_op=fop,
                 num_steps=nfe, zeta=zeta,
-                seed=0, verbose=False, **sample_kwargs,
+                seed=sampler_seed, verbose=False, **sample_kwargs,
             )
         dt = time.time() - t0
         x_hat = res.x_hat
@@ -203,6 +204,10 @@ def main():
     p.add_argument("--skip", default="",
                    help="Comma-separated operators to skip from the demo. "
                         "E.g., 'sr' to only run Gaussian + motion.")
+    p.add_argument("--seed", type=int, default=0,
+                   help="Seed for the sampler RNG (sampler init / trajectory). "
+                        "Measurement noise seed stays fixed at 0 so different "
+                        "--seed runs share the same measurement.")
     args = p.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -239,7 +244,7 @@ def main():
 
     summary_lines = [
         f"Demo run on {args.input}",
-        f"NFE={args.nfe}, sigma_n={args.sigma_n}, methods={methods}",
+        f"NFE={args.nfe}, sigma_n={args.sigma_n}, sampler_seed={args.seed}, methods={methods}",
         "",
         f"{'operator':<10}{'cell':<40}{'method':<14}{'PSNR':>8}{'SSIM':>8}{'LPIPS':>8}{'time':>8}",
         "-" * 100,
@@ -250,6 +255,7 @@ def main():
         cell_label, results = run_one_operator(
             x, blur_type, blur_params, args.sigma_n,
             methods, args.nfe, op_out, device, lpips,
+            sampler_seed=args.seed,
         )
         for method, p_, s_, l_, dt in results:
             summary_lines.append(
