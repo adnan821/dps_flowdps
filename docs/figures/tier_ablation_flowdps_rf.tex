@@ -1,0 +1,17 @@
+\begin{table}[h]
+  \centering
+  \caption{FlowDPS-on-RF tier ablation (mean PSNR dB, NFE=100, 50 imgs/cell).}
+  \label{tab:tier_flowdps}
+  \begin{tabular}{llrrrrrr}
+    \toprule
+    $\sigma_b$ & $\sigma_n$ & v1 & v2 & spectral & Π-GDM & Heun & Π-GDM-pure \\
+    \midrule
+    1.5 & 0.0 & 26.23 & 27.35 & 27.57 & 6.41 & 27.09 & 22.94 \\
+    1.5 & 0.05 & 23.65 & 24.48 & 23.64 & 21.87 & 24.24 & 17.75 \\
+    3.0 & 0.0 & 24.26 & 25.01 & 25.04 & 6.49 & 24.77 & 21.57 \\
+    3.0 & 0.05 & 22.58 & 23.29 & 22.96 & 22.10 & 23.08 & 18.74 \\
+    5.0 & 0.0 & 22.48 & 23.10 & 22.76 & 6.56 & 22.83 & 20.14 \\
+    5.0 & 0.05 & 21.13 & 21.72 & 21.40 & 20.02 & 21.48 & 18.73 \\
+    \bottomrule
+  \end{tabular}
+\end{table}

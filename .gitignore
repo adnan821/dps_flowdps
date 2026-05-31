@@ -6,7 +6,6 @@ outputs/
 data/
 checkpoints/
 external/
-docs/tmp/
 *.ckpt
 *.pt
 *.pth
@@ -17,19 +16,22 @@ docs/tmp/
 # Local-only project notes (kept off GitHub)
 .local/
 
-# Submission materials and authoring docs kept off GitHub
-docs/
-template/
-submission/
+# Prep / authoring docs kept off GitHub (study guide, Q&A, working
+# notes, scope/novelty audit, literature comparison, reading list,
+# handout, slides source, original long-form report, proposal, etc.)
+prep_docs/
 
-# LaTeX build artifacts
-docs/*.aux
-docs/*.log
-docs/*.out
-docs/*.toc
-docs/*.bbl
-docs/*.blg
-docs/*.fls
-docs/*.fdb_latexmk
-docs/*.synctex.gz
-docs/*.build.log
+# LaTeX build artifacts (anywhere in the tree)
+*.aux
+*.log
+*.out
+*.toc
+*.bbl
+*.blg
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+*.build.log
+*.nav
+*.snm
+*.vrb
