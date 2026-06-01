@@ -36,6 +36,8 @@ strong { font-weight: 700; }
 em { font-style: italic; }
 a { color: #0050a0; text-decoration: none; }
 a:hover { text-decoration: underline; }
+img { max-width: 100%; height: auto; display: block; margin: 6pt auto; page-break-inside: avoid; }
+table img { max-width: 100%; max-height: 130pt; margin: 0; }
 """
 
 doc = f"""<!doctype html>
